@@ -224,8 +224,11 @@ impl Drop for CapturePipeline {
 /// the shared pipeline clock, keeping video aligned to the clock-synced audio.
 ///
 /// The video branch converts to NV12 in system memory for the sysmem upload
-/// path. `TODO`: a DMABUF branch (no `videoconvert`, VA decoder) for zero-copy;
-/// select the audio source node explicitly instead of `pipewiresrc`'s default.
+/// path — except the P010 codec, which negotiates `P010_10LE` out of the appsink
+/// so 10-bit HDR reaches the renderer at full precision instead of being crushed
+/// to 8-bit (see [`crate::frame::negotiated_format`]). `TODO`: a DMABUF branch (no
+/// `videoconvert`, VA decoder) for zero-copy; select the audio source node
+/// explicitly instead of `pipewiresrc`'s default.
 /// Append the `,width=…,height=…,framerate=…/1` caps fragments present in `config`.
 fn append_dims(desc: &mut String, config: &PipelineConfig) {
     if let Some(w) = config.width {
@@ -278,7 +281,7 @@ fn build_description(config: &PipelineConfig, with_audio: bool) -> String {
 
     desc.push_str(&format!(
         "video/x-raw,format={}",
-        crate::frame::NEGOTIATED_FORMAT
+        crate::frame::negotiated_format(codec)
     ));
     if codec.is_none() {
         append_dims(&mut desc, config);
@@ -362,7 +365,8 @@ mod tests {
 
     #[test]
     fn raw_codec_pins_pixel_format_at_source() {
-        // 10-bit P010 pinned at the source, converted down to NV12 for the renderer.
+        // 10-bit P010 pinned at the source and kept 10-bit end to end (the HDR
+        // path), rather than converted down to 8-bit NV12 for the renderer.
         let cfg = PipelineConfig {
             device_node: "/dev/video0".into(),
             codec: Some(CaptureCodec::P010),
@@ -375,6 +379,7 @@ mod tests {
         assert!(desc.contains(
             "video/x-raw,format=P010_10LE,width=1920,height=1080,framerate=60/1 ! decodebin"
         ));
-        assert!(desc.contains("videoconvert ! video/x-raw,format=NV12 !"));
+        // The appsink negotiates P010_10LE, so the 10-bit frame survives to the GPU.
+        assert!(desc.contains("videoconvert ! video/x-raw,format=P010_10LE !"));
     }
 }

@@ -102,7 +102,13 @@ impl App {
             ),
             None => (0, String::new()),
         };
-        let menu = Menu::new(device_idx, transport_idx, address, config.media.audio);
+        let menu = Menu::new(
+            device_idx,
+            transport_idx,
+            address,
+            config.media.audio,
+            config.media.hdr_output,
+        );
 
         let input = match InputManager::new() {
             Ok(i) => Some(i),
@@ -472,6 +478,32 @@ impl App {
                 self.save_config();
                 self.rebuild_pipeline();
             }
+            MenuAction::SetHdrOutput(on) => {
+                self.config.media.hdr_output = on;
+                self.save_config();
+                // Reconfigure the swapchain live; then sync the menu to what the
+                // renderer actually settled on (it stays SDR if HDR is unavailable).
+                if let Some(active) = self.active.as_mut() {
+                    if active.renderer.set_hdr_output(on) {
+                        // The swapchain format changed, so the egui backend was
+                        // rebuilt and lost its uploaded textures. Recreate the egui
+                        // context so the next frame re-emits the full texture set.
+                        active.egui_ctx = egui::Context::default();
+                        active.egui_state = egui_winit::State::new(
+                            active.egui_ctx.clone(),
+                            egui::ViewportId::ROOT,
+                            &*active.window,
+                            Some(active.window.scale_factor() as f32),
+                            None,
+                            None,
+                        );
+                    }
+                    self.menu.set_hdr(
+                        active.renderer.hdr_available(),
+                        active.renderer.hdr_output(),
+                    );
+                }
+            }
             MenuAction::Connect => {
                 let kind = self.menu.selected_transport();
                 let address = self.menu.address.clone();
@@ -595,7 +627,7 @@ impl ApplicationHandler<UserEvent> for App {
             }
         };
 
-        let renderer = match Renderer::new(window.clone()) {
+        let renderer = match Renderer::new(window.clone(), self.config.media.hdr_output) {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!("failed to initialize GPU: {e}");
@@ -603,7 +635,17 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         };
-        self.debug.set_gpu(renderer.adapter_info().to_owned());
+        let hdr_status = if renderer.hdr_available() {
+            "HDR available"
+        } else {
+            "HDR unsupported"
+        };
+        self.debug
+            .set_gpu(format!("{} · {hdr_status}", renderer.adapter_info()));
+        // Reflect what the renderer could actually give us (an SDR-only display
+        // silently keeps HDR off) back into the menu toggle.
+        self.menu
+            .set_hdr(renderer.hdr_available(), renderer.hdr_output());
 
         let egui_ctx = egui::Context::default();
         let egui_state = egui_winit::State::new(

@@ -28,6 +28,19 @@ abstraction, and the Flatpak sandbox all work together.
 - [ ] **DMABUF zero-copy validation** — verify graphics-offload on AMD (Steam
       Deck) and the GL-texture fallback on NVIDIA.
 - [ ] Measure and, if needed, add per-branch latency compensation for A/V lock.
+- [x] **True HDR output** — P010 presents to a scRGB (`Rgba16Float`,
+      extended-sRGB-linear) swapchain when the surface advertises one, passing HDR
+      through instead of tone-mapping; falls back to the SDR tone-map otherwise.
+      Toggle in the settings menu (`media.hdr_output`).
+- [ ] **HDR output polish** — remaining items on the HDR path:
+      - Drive the SDR tone-map peak from the stream's HDR10 mastering / `MaxCLL`
+        metadata instead of the fixed 1000-nit assumption.
+      - Pass BT.2020 wide gamut through in HDR mode (currently the BT.2020→BT.709
+        conversion clamps out-of-709 colours) once a target-gamut probe exists.
+      - The egui overlay renders at the scRGB reference white (~80 nits) in HDR
+        mode; composite it at a configurable paper-white if it reads too dim.
+      - On-device validation under gamescope HDR (SteamOS) and a Wayland
+        `color-management` compositor.
 
 ## Input
 

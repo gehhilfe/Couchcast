@@ -113,6 +113,18 @@ pub struct MediaPrefs {
     pub framerate: Option<u32>,
     /// Whether to route the capture card's audio to the local output.
     pub audio: bool,
+    /// Whether to present through a true HDR (scRGB fp16) swapchain when the
+    /// display and compositor advertise support. When unavailable, or set to
+    /// `false`, HDR content is tone-mapped to the SDR display instead. Defaults
+    /// to `true` ("use HDR when the stack offers it").
+    #[serde(default = "default_true")]
+    pub hdr_output: bool,
+}
+
+/// serde default for [`MediaPrefs::hdr_output`] so configs written before the
+/// field existed load with HDR output enabled rather than off.
+fn default_true() -> bool {
+    true
 }
 
 impl Default for MediaPrefs {
@@ -123,6 +135,7 @@ impl Default for MediaPrefs {
             height: None,
             framerate: None,
             audio: true,
+            hdr_output: true,
         }
     }
 }
@@ -235,6 +248,7 @@ mod tests {
                 height: Some(1080),
                 framerate: Some(60),
                 audio: true,
+                hdr_output: true,
             },
             target: Some(TargetConfig {
                 transport: TransportKind::Adb,
@@ -247,5 +261,14 @@ mod tests {
         assert_eq!(parsed.last_device, cfg.last_device);
         assert_eq!(parsed.target, cfg.target);
         assert_eq!(parsed.media, cfg.media);
+    }
+
+    #[test]
+    fn config_predating_hdr_output_defaults_it_on() {
+        // A media table written before `hdr_output` existed must load with HDR
+        // output enabled, not silently off (bool's own default).
+        let cfg: Config = toml::from_str("[media]\naudio = false\n").expect("deserialize");
+        assert!(cfg.media.hdr_output);
+        assert!(!cfg.media.audio);
     }
 }

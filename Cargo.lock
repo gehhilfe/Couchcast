@@ -423,6 +423,7 @@ dependencies = [
  "egui",
  "egui-wgpu",
  "egui-winit",
+ "naga",
  "pollster",
  "raw-window-handle",
  "tokio",

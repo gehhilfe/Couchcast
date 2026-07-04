@@ -24,6 +24,7 @@ enum Row {
     Transport,
     Address,
     Audio,
+    Hdr,
     Connect,
     Close,
 }
@@ -36,6 +37,7 @@ const ROWS: &[Row] = &[
     Row::Transport,
     Row::Address,
     Row::Audio,
+    Row::Hdr,
     Row::Connect,
     Row::Close,
 ];
@@ -56,6 +58,8 @@ pub enum MenuAction {
     },
     /// Toggle audio passthrough.
     SetAudio(bool),
+    /// Toggle HDR (scRGB) output when the display supports it.
+    SetHdrOutput(bool),
     /// Persist the target + (re)connect the transport.
     Connect,
     /// Close the menu.
@@ -71,6 +75,11 @@ pub struct Menu {
     transport_idx: usize,
     pub address: String,
     audio: bool,
+    /// The HDR-output preference; only actionable when `hdr_available`.
+    hdr_output: bool,
+    /// Whether the display/compositor actually offers an HDR surface. Set by
+    /// [`Menu::set_hdr`] once the renderer has probed the surface.
+    hdr_available: bool,
     /// Set for one frame after entering edit mode, so the draw code can grab
     /// egui keyboard focus for the text field exactly once.
     pub focus_address: bool,
@@ -88,7 +97,13 @@ pub struct Menu {
 }
 
 impl Menu {
-    pub fn new(device_idx: usize, transport_idx: usize, address: String, audio: bool) -> Self {
+    pub fn new(
+        device_idx: usize,
+        transport_idx: usize,
+        address: String,
+        audio: bool,
+        hdr_output: bool,
+    ) -> Self {
         Self {
             // Dev hook: start with the menu open to exercise its drawing without
             // a controller.
@@ -99,6 +114,8 @@ impl Menu {
             transport_idx,
             address,
             audio,
+            hdr_output,
+            hdr_available: false,
             focus_address: false,
             formats: Vec::new(),
             codec_opts: vec![None],
@@ -144,6 +161,14 @@ impl Menu {
         self.fps_idx = framerate
             .and_then(|f| self.fps_opts.iter().position(|o| *o == Some(f)))
             .unwrap_or(0);
+    }
+
+    /// Record what the renderer resolved for HDR: whether the surface offers an
+    /// HDR format at all, and whether HDR output is actually active (an SDR-only
+    /// display forces it off regardless of the stored preference).
+    pub fn set_hdr(&mut self, available: bool, active: bool) {
+        self.hdr_available = available;
+        self.hdr_output = active;
     }
 
     fn current_codec(&self) -> Option<CaptureCodec> {
@@ -284,6 +309,10 @@ impl Menu {
                 self.audio = !self.audio;
                 MenuAction::SetAudio(self.audio)
             }
+            Row::Hdr if self.hdr_available => {
+                self.hdr_output = !self.hdr_output;
+                MenuAction::SetHdrOutput(self.hdr_output)
+            }
             _ => MenuAction::None,
         }
     }
@@ -366,6 +395,16 @@ impl Menu {
                             "Audio passthrough",
                             &cyc(if self.audio { "On" } else { "Off" }),
                         ),
+                        Row::Hdr => {
+                            let val = if !self.hdr_available {
+                                "Unavailable"
+                            } else if self.hdr_output {
+                                "On"
+                            } else {
+                                "Off"
+                            };
+                            value_row(ui, "HDR output", &cyc(val))
+                        }
                         Row::Connect => action_row(ui, "Connect"),
                         Row::Close => action_row(ui, "Close"),
                     });
@@ -492,7 +531,7 @@ mod tests {
 
     #[test]
     fn set_formats_seeds_from_prefs() {
-        let mut menu = Menu::new(0, 0, String::new(), true);
+        let mut menu = Menu::new(0, 0, String::new(), true, true);
         menu.set_formats(
             sample_formats(),
             Some(CaptureCodec::Mjpeg),
@@ -507,7 +546,7 @@ mod tests {
 
     #[test]
     fn changing_codec_drops_unsupported_resolution_to_auto() {
-        let mut menu = Menu::new(0, 0, String::new(), true);
+        let mut menu = Menu::new(0, 0, String::new(), true, true);
         menu.set_formats(
             sample_formats(),
             Some(CaptureCodec::Mjpeg),
@@ -534,7 +573,7 @@ mod tests {
 
     #[test]
     fn changing_codec_keeps_shared_resolution() {
-        let mut menu = Menu::new(0, 0, String::new(), true);
+        let mut menu = Menu::new(0, 0, String::new(), true, true);
         menu.set_formats(
             sample_formats(),
             Some(CaptureCodec::Mjpeg),
@@ -552,8 +591,30 @@ mod tests {
     }
 
     #[test]
+    fn hdr_toggle_is_inert_until_available() {
+        let mut menu = Menu::new(0, 0, String::new(), true, true);
+        menu.selected = row_index(Row::Hdr);
+        // No HDR surface probed yet → cycling does nothing.
+        assert_eq!(menu.cycle(1, 0), MenuAction::None);
+
+        // Once the renderer reports HDR available and active, cycling toggles it.
+        menu.set_hdr(true, true);
+        assert_eq!(menu.cycle(1, 0), MenuAction::SetHdrOutput(false));
+        assert_eq!(menu.cycle(1, 0), MenuAction::SetHdrOutput(true));
+    }
+
+    #[test]
+    fn set_hdr_forces_preference_off_when_unavailable() {
+        let mut menu = Menu::new(0, 0, String::new(), true, true);
+        // Stored preference is on, but the display offers no HDR surface.
+        menu.set_hdr(false, false);
+        menu.selected = row_index(Row::Hdr);
+        assert_eq!(menu.cycle(1, 0), MenuAction::None);
+    }
+
+    #[test]
     fn auto_codec_forces_auto_resolution_and_framerate() {
-        let mut menu = Menu::new(0, 0, String::new(), true);
+        let mut menu = Menu::new(0, 0, String::new(), true, true);
         menu.set_formats(sample_formats(), None, None, None, None);
         assert_eq!(menu.current_codec(), None);
         // With no codec pinned there are no specific device modes to offer.

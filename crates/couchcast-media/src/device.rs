@@ -19,8 +19,9 @@ use crate::init_gstreamer;
 /// The capture *input* format a device delivers, i.e. a V4L2 pixel format or
 /// compressed codec. Selecting one pins it on the source caps in front of
 /// `decodebin`; `None` lets the pipeline auto-negotiate (the default). Raw 10-bit
-/// `P010` is captured then converted down to the renderer's 8-bit NV12 — it works,
-/// but there is no 10-bit/HDR display path yet.
+/// `P010` stays 10-bit end to end and drives the renderer's HDR path (BT.2020 +
+/// PQ decode, tone-mapped to the display); every other codec goes through the
+/// 8-bit NV12 SDR path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CaptureCodec {
     /// Motion-JPEG (`image/jpeg`, V4L2 `MJPG`).
