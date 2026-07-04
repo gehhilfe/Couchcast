@@ -14,11 +14,6 @@
 
 use std::collections::HashSet;
 
-#[cfg(feature = "debug-input-hud")]
-use std::cell::RefCell;
-
-use gtk4 as gtk;
-
 use couchcast_transport::PadButton;
 
 #[cfg(feature = "debug-input-hud")]
@@ -30,7 +25,6 @@ pub use disabled::ButtonHud;
 #[cfg(feature = "debug-input-hud")]
 mod enabled {
     use super::*;
-    use gtk::prelude::*;
 
     /// Fixed display order so the HUD text doesn't reshuffle as the (unordered)
     /// pressed set changes. Lists every [`PadButton`] variant.
@@ -54,108 +48,63 @@ mod enabled {
         PadButton::Guide,
     ];
 
-    /// Styling for the HUD label: a translucent dark pill, monospace, top-left,
-    /// so it stays legible over live video.
-    const CSS: &str = "\
-.couchcast-button-hud {
-  font-family: monospace;
-  font-size: 13px;
-  color: #f5f5f5;
-  background-color: rgba(0, 0, 0, 0.72);
-  padding: 6px 10px;
-  border-radius: 8px;
-}
-";
-
-    /// A small label pinned to the top-left of the overlay showing the connected
-    /// controllers and the buttons currently held down.
+    /// Tracks the connected controllers and the buttons currently held, and
+    /// draws them as a translucent overlay in the top-left via egui.
     ///
     /// The connected-pad line is the key diagnostic: an empty "Pads" line means
     /// `gilrs` sees no controller at all (Steam isn't presenting a virtual
     /// gamepad — e.g. the shortcut is on a keyboard/mouse layout), whereas a pad
     /// listed with no buttons reacting means Steam isn't routing input to this
     /// window (a focus-tracking problem).
+    #[derive(Default)]
     pub struct ButtonHud {
-        label: gtk::Label,
-        devices: RefCell<Vec<String>>,
-        held: RefCell<Vec<&'static str>>,
+        devices: Vec<String>,
+        held: Vec<&'static str>,
     }
 
     impl ButtonHud {
         pub fn new() -> Self {
-            install_css();
-            let label = gtk::Label::builder()
-                .halign(gtk::Align::Start)
-                .valign(gtk::Align::Start)
-                .margin_top(12)
-                .margin_start(12)
-                .build();
-            label.add_css_class("couchcast-button-hud");
-            let hud = Self {
-                label,
-                devices: RefCell::new(Vec::new()),
-                held: RefCell::new(Vec::new()),
-            };
-            hud.render();
-            hud
-        }
-
-        /// Add the HUD label to the window's overlay so it floats over the video.
-        pub fn attach(&self, overlay: &gtk::Overlay) {
-            overlay.add_overlay(&self.label);
+            Self::default()
         }
 
         /// Refresh the held-button line from the current set of held buttons.
-        pub fn update(&self, pressed: &HashSet<PadButton>) {
-            *self.held.borrow_mut() = DISPLAY_ORDER
+        pub fn update(&mut self, pressed: &HashSet<PadButton>) {
+            self.held = DISPLAY_ORDER
                 .iter()
                 .filter(|b| pressed.contains(b))
                 .map(|b| button_label(*b))
                 .collect();
-            self.render();
         }
 
         /// Refresh the connected-controllers line (call on connect/disconnect).
-        pub fn set_devices(&self, names: &[String]) {
-            *self.devices.borrow_mut() = names.to_vec();
-            self.render();
+        pub fn set_devices(&mut self, names: &[String]) {
+            self.devices = names.to_vec();
         }
 
-        /// Repaint the label from the current device + held-button state.
-        fn render(&self) {
-            let devices = self.devices.borrow();
-            let pads = if devices.is_empty() {
+        /// Draw the HUD as a top-left overlay window.
+        pub fn draw(&self, ctx: &egui::Context) {
+            let pads = if self.devices.is_empty() {
                 "(none — Steam is not presenting a gamepad)".to_owned()
             } else {
-                devices.join(", ")
+                self.devices.join(", ")
             };
-            let held = self.held.borrow();
-            let buttons = if held.is_empty() {
+            let buttons = if self.held.is_empty() {
                 "—".to_owned()
             } else {
-                held.join("  ")
+                self.held.join("  ")
             };
-            self.label
-                .set_text(&format!("Pads: {pads}\nButtons: {buttons}"));
-        }
-    }
-
-    impl Default for ButtonHud {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
-    /// Register the HUD stylesheet once against the default display.
-    fn install_css() {
-        let provider = gtk::CssProvider::new();
-        provider.load_from_string(CSS);
-        if let Some(display) = gtk::gdk::Display::default() {
-            gtk::style_context_add_provider_for_display(
-                &display,
-                &provider,
-                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
+            egui::Area::new(egui::Id::new("couchcast-button-hud"))
+                .anchor(egui::Align2::LEFT_TOP, egui::vec2(12.0, 12.0))
+                .show(ctx, |ui| {
+                    egui::Frame::new()
+                        .fill(egui::Color32::from_black_alpha(184))
+                        .inner_margin(egui::Margin::symmetric(10, 6))
+                        .corner_radius(8.0)
+                        .show(ui, |ui| {
+                            ui.monospace(format!("Pads: {pads}"));
+                            ui.monospace(format!("Buttons: {buttons}"));
+                        });
+                });
         }
     }
 
@@ -200,10 +149,10 @@ mod disabled {
             Self
         }
 
-        pub fn attach(&self, _overlay: &gtk::Overlay) {}
+        pub fn update(&mut self, _pressed: &HashSet<PadButton>) {}
 
-        pub fn update(&self, _pressed: &HashSet<PadButton>) {}
+        pub fn set_devices(&mut self, _names: &[String]) {}
 
-        pub fn set_devices(&self, _names: &[String]) {}
+        pub fn draw(&self, _ctx: &egui::Context) {}
     }
 }

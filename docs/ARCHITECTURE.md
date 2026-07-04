@@ -8,69 +8,80 @@ future changes don't accidentally regress latency or A/V sync.
 
 | Crate | Kind | Responsibility |
 | --- | --- | --- |
-| `couchcast` | bin | GTK4/libadwaita app: window, settings overlay, input routing, and wiring everything together. Contains the `worker` (tokio transport thread) and the UI. |
-| `couchcast-media` | lib | The single GStreamer pipeline (video + audio), V4L2 device enumeration, and the `gdk::Paintable` handed to the UI. |
-| `couchcast-input` | lib | `gilrs` controller reading, normalized to a GTK-free `PadEvent` stream plus UI `NavEvent`s. |
+| `couchcast` | bin | winit/wgpu/egui app: window, render loop, controller-first menu, input routing, and wiring everything together. Contains the `worker` (tokio transport thread), the `render`er, and the `menu`. |
+| `couchcast-media` | lib | The single GStreamer pipeline (video + audio), V4L2 device enumeration, and the `VideoFrame`s handed to the app via an `appsink` callback. Renderer-agnostic (no GPU dependency). |
+| `couchcast-input` | lib | `gilrs` controller reading, normalized to a toolkit-free `PadEvent` stream, plus the `NavDir`/`NavRepeater` menu-cursor helpers. |
 | `couchcast-transport` | lib | The `Transport` trait, the device-agnostic `RemoteAction` vocabulary, `DeviceCapabilities`, and the pluggable backends (ADB built; Bluetooth/CEC/Roku feature-gated placeholders). |
 | `couchcast-config` | lib | TOML config (device, video prefs, target, editable button map) under XDG. |
 | `xtask` | bin | Dev tooling (`cargo xtask …`): regenerate `cargo-sources.json`, Flatpak build/lint, local CI. |
 
 Dependency direction is a DAG: `transport` is the leaf; `config` and `input`
-depend on it for the shared vocabulary; `media` depends on GStreamer/GTK; the
-`couchcast` binary depends on everything.
+depend on it for the shared vocabulary; `media` depends on GStreamer (but not on
+the GPU/UI stack); the `couchcast` binary depends on everything and owns the
+winit/wgpu/egui layer.
 
 ## Data flow
 
 ```
-                        ┌──────────────── couchcast (GTK main thread) ────────────────┐
- capture dongle ──▶ v4l2src ─▶ decode ─▶ gtk4paintablesink ─▶ gdk::Paintable ─▶ Picture│
-                    pipewiresrc ─▶ … ─▶ autoaudiosink   (same GstPipeline / clock)      │
-                                                                                        │
- controller ──▶ gilrs ─▶ PadEvent ─┬─(overlay open)─▶ NavEvent ─▶ GTK focus move        │
-                                    └─(capture mode)─▶ ButtonMap ─▶ RemoteAction ──┐     │
-                        └───────────────────────────────────────────────────────── │ ───┘
-                                                                                    ▼  (tokio::mpsc)
+   gst streaming thread                 ┌──────── couchcast (winit main thread) ────────┐
+ capture ─▶ v4l2src ─▶ decode ─▶ appsink ─▶ VideoFrame ─(mailbox + wake)─▶ wgpu texture  │
+           pipewiresrc ─▶ … ─▶ autoaudiosink   (same GstPipeline / clock)                │
+                                          │  render: video quad → egui menu (LoadOp::Load)│
+ controller ──▶ gilrs ─▶ PadEvent ─┬─(menu open)──▶ NavDir/NavRepeater ─▶ menu cursor     │
+                                   └─(capture mode)─▶ ButtonMap ─▶ RemoteAction ──┐       │
+                        └──────────────────────────────────────────────────────── │ ─────┘
+                                                                                   ▼  (tokio::mpsc)
                         ┌──────────── worker (tokio thread) ──────────────────────────────┐
                         │ Box<dyn Transport>::send(RemoteAction).await → persistent adb    │
                         └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Two execution contexts, one process
+## Execution contexts, one process
 
-- **GTK / glib main thread** drives the UI, video rendering, and controller
-  polling. `gilrs` is polled from a `glib::timeout_add_local` (~120 Hz); it never
-  blocks.
+- **winit main thread** drives the UI, the wgpu render loop, and controller
+  polling. `gilrs` is polled from `about_to_wait` on an 8 ms `WaitUntil` cadence
+  (~120 Hz); it never blocks. egui is immediate-mode over an owned `App` struct —
+  no `Rc<RefCell>`; nothing about the UI needs to be `Send`.
+- **GStreamer streaming thread** runs the pipeline and fires the `appsink`
+  callback per decoded frame. The callback builds a `VideoFrame`, drops it into a
+  single-slot mailbox, and wakes the winit loop via `EventLoopProxy`; the main
+  thread drains + uploads it on the next redraw. A small **bus thread** polls the
+  pipeline bus for error/EOS logging (no glib main loop needed).
 - **tokio worker thread** owns all transport I/O (the persistent ADB shell,
   network, reconnect). The main thread hands it `RemoteAction`s over a bounded
   `tokio::mpsc` channel with a non-blocking `try_send`, so **UI never blocks on
   transport I/O** and input is dropped under backpressure rather than stalling.
-
-Shared app state lives in an `Rc<RefCell<AppState>>` (single-threaded, main
-thread only). Nothing about the UI needs to be `Send`.
 
 ## Video + audio: one pipeline, deliberately
 
 Both branches live in a **single `GstPipeline`**:
 
 ```
-v4l2src device=… do-timestamp=true ! decodebin ! videoconvert ! queue leaky=downstream ! gtk4paintablesink sync=false
+v4l2src device=… do-timestamp=true ! decodebin ! videoconvert ! video/x-raw,format=NV12 ! queue leaky=downstream max-size-buffers=3 ! appsink sync=true max-buffers=1 drop=true
 pipewiresrc ! queue leaky=downstream max-size-time=20ms ! audioconvert ! audioresample ! autoaudiosink
 ```
 
 One pipeline means one clock and one running-time base, which is what actually
 produces A/V sync — GStreamer's PTS scheduling handles it with no hand-rolled
-drift correction. This is the decisive reason to render video through GStreamer
-(rather than a bare `waylandsink`/`wgpu` surface): audio then comes almost for
-free, and `gtk4paintablesink` still lets the settings UI composite on top via
-`Gtk.Overlay`.
+drift correction. This is the decisive reason to keep capture on GStreamer
+(rather than a bare V4L2 read): audio comes almost for free. The video branch
+terminates in an `appsink`; the app uploads each `VideoFrame` to a wgpu texture
+and composites the egui menu on top in the same render pass (`LoadOp::Load`).
 
 ### Latency knobs (do not remove without measuring)
 
 GStreamer's default buffering (~200 ms) would silently defeat the low-latency
-goal. The video sink runs `sync=false` behind a short `leaky=downstream` queue to
-approach one-frame latency. The audio sink keeps default sync so the shared clock
-preserves A/V alignment; `audioresample` absorbs the capture-card-vs-output clock
-skew.
+goal. The video `appsink` runs `sync=true` (release each buffer at its PTS
+against the shared clock, keeping video aligned to the clock-synced audio) with
+`max-buffers=1 drop=true` behind a short `leaky=downstream` queue, so only the
+freshest frame is kept — ~one-frame latency for a live source. The audio sink
+keeps default sync; `audioresample` absorbs the capture-card-vs-output clock
+skew. (`sync=false` is the fallback if measurement shows added latency.)
+
+The current upload path is a single system-memory copy (physically optimal for a
+USB dongle, whose frames already land in RAM). The DMABUF zero-copy path — genuine
+only with a VA hardware decoder in the chain — is a planned follow-up; wgpu's
+Vulkan backend is the enabler.
 
 ### Known follow-ups (see ROADMAP)
 
@@ -92,11 +103,13 @@ input.
 `couchcast-input` maps `gilrs` buttons/axes to a small `PadEvent` enum expressed
 in `couchcast-transport`'s vocabulary. The app routes events by mode:
 
-- **Overlay open** → `nav_from_pad` → GTK focus moves (`child_focus(direction)`),
-  A activates the focused widget, B closes.
-- **Overlay closed (capture mode)** → the editable `ButtonMap` turns a `PadButton`
+- **Menu open** → a `NavDir` (from the D-pad or left stick, with `NavRepeater`
+  hold-to-repeat) moves an owned `selected` cursor; Left/Right cycles the focused
+  row's value, A activates, B closes. The menu is drawn immediately in egui with
+  our own highlight — egui's focus system is bypassed.
+- **Menu closed (capture mode)** → the editable `ButtonMap` turns a `PadButton`
   into a `RemoteAction`, forwarded to the worker.
-- **Start + Select chord** toggles the overlay. (A chord Steam reliably passes
+- **Start + Select chord** toggles the menu. (A chord Steam reliably passes
   through, unlike the Guide/Steam button which Steam intercepts.)
 
 ## Transport: the central abstraction
@@ -134,13 +147,14 @@ decision and is in place from day one.
 
 ## Flatpak / gamescope
 
-- GStreamer core and GTK come from the `org.gnome.Platform` runtime — never
-  bundle them (symbol clashes). Only custom Rust `gst` plugins would go in
-  `/app/lib/gstreamer-1.0`; `gtk4paintablesink` is registered in-process from the
-  `gst-plugin-gtk4` crate.
-- The app is a single fullscreen Wayland client; gamescope owns
-  vsync/fullscreen. Design for exactly one top-level window to avoid focus
-  mis-routing.
+- GStreamer core and Mesa (the Vulkan ICD wgpu needs) come from the
+  `org.gnome.Platform` runtime — never bundle them (symbol clashes). Only custom
+  Rust `gst` plugins would go in `/app/lib/gstreamer-1.0`. `--device=dri` grants
+  GPU/Vulkan access. There is no GTK/`gst-plugin-gtk4` dependency any more.
+- The app is a single fullscreen window; gamescope owns vsync/fullscreen. It runs
+  under XWayland when launched by Steam (winit forced to the X11 backend) so Steam
+  Input can focus-track and route the controller. Design for exactly one top-level
+  window to avoid focus mis-routing.
 - `finish-args` and the `--device=all` justification live in
   [`PACKAGING.md`](PACKAGING.md).
 

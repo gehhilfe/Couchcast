@@ -1,10 +1,10 @@
 //! The transport worker: a dedicated thread running a tokio runtime that owns the
 //! active [`Transport`] and performs all (async, potentially blocking) input
-//! forwarding off the GTK main thread.
+//! forwarding off the winit main thread.
 //!
-//! The GTK side never blocks on transport I/O — it hands [`WorkerCmd`]s over a
+//! The UI thread never blocks on transport I/O — it hands [`WorkerCmd`]s over a
 //! bounded channel with a non-blocking `try_send`, dropping input under
-//! backpressure rather than stalling the UI.
+//! backpressure rather than stalling the render loop.
 
 use couchcast_config::TransportKind;
 use couchcast_transport::{
@@ -13,7 +13,7 @@ use couchcast_transport::{
 };
 use tokio::sync::mpsc;
 
-/// A command sent from the GTK main thread to the transport worker.
+/// A command sent from the winit main thread to the transport worker.
 pub enum WorkerCmd {
     /// Switch to `kind` and connect it to `addr`.
     Connect {

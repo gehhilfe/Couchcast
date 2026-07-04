@@ -12,9 +12,10 @@ a development environment running and what we expect from contributions.
 
 ## Development environment
 
-Couchcast is a Rust application built on GStreamer and GTK4. You need a recent
-stable Rust toolchain (see [`rust-toolchain.toml`](rust-toolchain.toml)) plus the
-native development libraries.
+Couchcast is a Rust application built on GStreamer, with a `winit`/`wgpu`/`egui`
+render layer (Vulkan). You need a recent stable Rust toolchain (see
+[`rust-toolchain.toml`](rust-toolchain.toml)) plus the native development
+libraries and a Vulkan loader/driver.
 
 ### System dependencies
 
@@ -22,19 +23,17 @@ On an Arch-based system (including SteamOS's dev tooling):
 
 ```sh
 sudo pacman -S --needed \
-  gtk4 libadwaita \
   gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
-  glib2 pkgconf
+  glib2 pkgconf vulkan-icd-loader
 ```
 
 On Debian/Ubuntu:
 
 ```sh
 sudo apt install -y \
-  libgtk-4-dev libadwaita-1-dev \
   libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-  libglib2.0-dev pkg-config
+  libglib2.0-dev pkg-config libvulkan-dev
 ```
 
 For input forwarding to a Fire TV / Android TV target during development you also

@@ -2,10 +2,11 @@
 
 use gst::prelude::*;
 use gstreamer as gst;
-use gtk4::gdk;
+use gstreamer_app as gst_app;
 
 use crate::error::MediaError;
-use crate::init_video_sink;
+use crate::frame::VideoFrame;
+use crate::init_gstreamer;
 
 /// Parameters for building the capture pipeline.
 #[derive(Debug, Clone)]
@@ -35,12 +36,12 @@ impl PipelineConfig {
     }
 }
 
-/// A live capture pipeline. Rendering is exposed as a [`gdk::Paintable`] the UI
-/// drops into a `gtk::Picture`; audio (if enabled) plays straight to the default
-/// output. Stops itself on drop.
+/// A live capture pipeline. Video is delivered as [`VideoFrame`]s through a
+/// callback registered with [`CapturePipeline::set_frame_callback`]; audio (if
+/// enabled) plays straight to the default output. Stops itself on drop.
 pub struct CapturePipeline {
     pipeline: gst::Pipeline,
-    paintable: gdk::Paintable,
+    appsink: gst_app::AppSink,
     has_audio: bool,
     /// Keeps the bus watch alive — dropping the guard removes the watch.
     bus_guard: Option<gst::bus::BusWatchGuard>,
@@ -51,7 +52,7 @@ impl CapturePipeline {
     /// branch cannot be constructed (e.g. no PipeWire), it falls back to a
     /// video-only pipeline rather than failing outright.
     pub fn new(config: &PipelineConfig) -> Result<Self, MediaError> {
-        init_video_sink()?;
+        init_gstreamer()?;
         match Self::build(config, config.audio) {
             Ok(pipeline) => Ok(pipeline),
             Err(e) if config.audio => {
@@ -74,20 +75,35 @@ impl CapturePipeline {
         let sink = pipeline
             .by_name("videosink")
             .ok_or(MediaError::MissingElement("videosink"))?;
-        let paintable = sink.property::<gdk::Paintable>("paintable");
+        let appsink = sink
+            .downcast::<gst_app::AppSink>()
+            .map_err(|_| MediaError::MissingElement("appsink"))?;
 
         Ok(Self {
             pipeline,
-            paintable,
+            appsink,
             has_audio: with_audio,
             bus_guard: None,
         })
     }
 
-    /// The paintable rendering the live video. Set it on a `gtk::Picture` with
-    /// `picture.set_paintable(Some(pipeline.paintable()))`.
-    pub fn paintable(&self) -> &gdk::Paintable {
-        &self.paintable
+    /// Register a callback fired on the GStreamer streaming thread for each
+    /// decoded frame. Replaces the old `gdk::Paintable`: the app wires this to a
+    /// single-slot mailbox + an event-loop wakeup, then imports/uploads the
+    /// frame on its own (GPU-owning) thread.
+    pub fn set_frame_callback(&self, cb: impl Fn(VideoFrame) + Send + 'static) {
+        self.appsink.set_callbacks(
+            gst_app::AppSinkCallbacks::builder()
+                .new_sample(move |sink| {
+                    let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                    match VideoFrame::from_sample(&sample) {
+                        Ok(frame) => cb(frame),
+                        Err(e) => tracing::warn!("failed to extract frame: {e}"),
+                    }
+                    Ok(gst::FlowSuccess::Ok)
+                })
+                .build(),
+        );
     }
 
     /// Whether the audio branch is present in this pipeline.
@@ -123,8 +139,41 @@ impl CapturePipeline {
         let _ = self.pipeline.set_state(gst::State::Null);
     }
 
+    /// Spawn a background thread that polls the pipeline bus and logs errors,
+    /// warnings, and EOS. Unlike [`install_bus_logger`](Self::install_bus_logger)
+    /// this needs no glib main loop, so it fits the winit/wgpu app whose main
+    /// thread runs the render loop. The thread lives for the process.
+    pub fn spawn_bus_logger(&self) {
+        let Some(bus) = self.pipeline.bus() else {
+            return;
+        };
+        let _ = std::thread::Builder::new()
+            .name("couchcast-gst-bus".into())
+            .spawn(move || {
+                use gst::MessageView;
+                loop {
+                    let Some(msg) = bus.timed_pop(gst::ClockTime::from_seconds(1)) else {
+                        continue;
+                    };
+                    match msg.view() {
+                        MessageView::Error(e) => tracing::error!(
+                            "pipeline error from {:?}: {} ({:?})",
+                            e.src().map(|s| s.path_string()),
+                            e.error(),
+                            e.debug()
+                        ),
+                        MessageView::Warning(w) => {
+                            tracing::warn!("pipeline warning: {} ({:?})", w.error(), w.debug())
+                        }
+                        MessageView::Eos(_) => tracing::info!("pipeline reached end of stream"),
+                        _ => {}
+                    }
+                }
+            });
+    }
+
     /// Install a bus watch that logs pipeline errors, warnings, and EOS. Must be
-    /// called from the thread running the glib main loop (i.e. the GTK main
+    /// called from the thread running a glib main loop (the dedicated bus
     /// thread). The watch lives until the pipeline is dropped.
     pub fn install_bus_logger(&mut self) -> Result<(), MediaError> {
         let Some(bus) = self.pipeline.bus() else {
@@ -163,45 +212,56 @@ impl Drop for CapturePipeline {
 /// Assemble the `gst-launch`-style pipeline description.
 ///
 /// Latency knobs matter here: `decodebin` auto-plugs whatever cheap dongles
-/// expose (MJPEG / H.264 / raw YUYV); a short `leaky=downstream` queue plus
-/// `sync=false` on the sink collapse GStreamer's default ~200 ms buffering
-/// toward one-frame latency. The audio branch keeps default sync so the shared
-/// clock preserves A/V alignment.
+/// expose (MJPEG / H.264 / raw YUYV); a short `leaky=downstream` queue plus the
+/// `appsink`'s `max-buffers=1 drop=true` collapse GStreamer's default buffering
+/// toward one-frame latency. `sync=true` releases each buffer at its PTS against
+/// the shared pipeline clock, keeping video aligned to the clock-synced audio.
 ///
-/// `TODO`: probe the device's real caps and prefer a hardware VA-API decoder
-/// (`vajpegdec`/`vah264dec`) over `decodebin`'s CPU fallback; select the audio
-/// source node explicitly instead of relying on `pipewiresrc`'s default (the top
-/// audio footgun — see `docs/ARCHITECTURE.md`).
+/// The video branch converts to NV12 in system memory for the sysmem upload
+/// path. `TODO`: a DMABUF branch (no `videoconvert`, VA decoder) for zero-copy;
+/// select the audio source node explicitly instead of `pipewiresrc`'s default.
 fn build_description(config: &PipelineConfig, with_audio: bool) -> String {
     let mut desc = String::new();
 
     // --- Video branch ---
-    desc.push_str(&format!(
-        "v4l2src device={} do-timestamp=true ! decodebin ! videoconvert ! ",
-        config.device_node
-    ));
+    // Dev hook: COUCHCAST_TEST_SOURCE swaps the capture device for a synthetic
+    // test pattern, so the appsink → upload → render path can be exercised on a
+    // machine with no capture hardware.
+    if std::env::var_os("COUCHCAST_TEST_SOURCE").is_some() {
+        desc.push_str("videotestsrc is-live=true ! videoconvert ! ");
+    } else {
+        desc.push_str(&format!(
+            "v4l2src device={} do-timestamp=true ! decodebin ! videoconvert ! ",
+            config.device_node
+        ));
+    }
 
     if config.width.is_some() || config.height.is_some() || config.framerate.is_some() {
-        desc.push_str("videoscale ! videorate ! video/x-raw");
-        if let Some(w) = config.width {
-            desc.push_str(&format!(",width={w}"));
-        }
-        if let Some(h) = config.height {
-            desc.push_str(&format!(",height={h}"));
-        }
-        if let Some(fps) = config.framerate {
-            desc.push_str(&format!(",framerate={fps}/1"));
-        }
-        desc.push_str(" ! ");
+        desc.push_str("videoscale ! videorate ! ");
+    }
+
+    desc.push_str(&format!(
+        "video/x-raw,format={}",
+        crate::frame::NEGOTIATED_FORMAT
+    ));
+    if let Some(w) = config.width {
+        desc.push_str(&format!(",width={w}"));
+    }
+    if let Some(h) = config.height {
+        desc.push_str(&format!(",height={h}"));
+    }
+    if let Some(fps) = config.framerate {
+        desc.push_str(&format!(",framerate={fps}/1"));
     }
 
     desc.push_str(
-        "queue leaky=downstream max-size-buffers=3 max-size-time=0 max-size-bytes=0 ! \
-         gtk4paintablesink name=videosink sync=false",
+        " ! queue leaky=downstream max-size-buffers=3 max-size-time=0 max-size-bytes=0 ! \
+         appsink name=videosink sync=true max-buffers=1 drop=true",
     );
 
     // --- Audio branch (independent chain in the same pipeline / clock) ---
-    if with_audio {
+    // The synthetic test source is video-only (no PipeWire node to attach to).
+    if with_audio && std::env::var_os("COUCHCAST_TEST_SOURCE").is_none() {
         desc.push_str(
             "  pipewiresrc ! queue leaky=downstream max-size-time=20000000 ! \
              audioconvert ! audioresample ! autoaudiosink",
@@ -216,11 +276,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn description_includes_device_and_low_latency_sink() {
+    fn description_includes_device_and_low_latency_appsink() {
         let cfg = PipelineConfig::new("/dev/video0");
         let desc = build_description(&cfg, false);
         assert!(desc.contains("v4l2src device=/dev/video0"));
-        assert!(desc.contains("gtk4paintablesink name=videosink sync=false"));
+        assert!(desc.contains("appsink name=videosink sync=true max-buffers=1 drop=true"));
+        assert!(desc.contains("format=NV12"));
+        assert!(!desc.contains("gtk4paintablesink"));
         assert!(!desc.contains("pipewiresrc"));
     }
 
@@ -245,5 +307,6 @@ mod tests {
         assert!(desc.contains("width=1920"));
         assert!(desc.contains("height=1080"));
         assert!(desc.contains("framerate=60/1"));
+        assert!(desc.contains("videoscale"));
     }
 }

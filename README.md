@@ -25,7 +25,7 @@ Gaming Mode — making a streaming stick behave like a native Steam entry.
 
 ```
  ┌───────────┐   HDMI    ┌───────────────┐   USB    ┌──────────────── Couchcast ─────────────────┐
- │ Fire TV / │ ────────▶ │ HDMI capture  │ ───────▶ │  v4l2src → decode → gtk4paintablesink       │
+ │ Fire TV / │ ────────▶ │ HDMI capture  │ ───────▶ │  v4l2src → decode → appsink → wgpu texture   │
  │ streaming │           │ dongle (V4L2) │          │  pipewiresrc → autoaudiosink   (one         │
  │  stick    │ ◀───────┐ └───────────────┘          │                                 pipeline)   │
  └───────────┘         │                            │  gilrs ─▶ button map ─▶ Transport ──┐        │
@@ -44,7 +44,7 @@ later. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 Capture & display
 - [x] Enumerate and select a V4L2 capture device
-- [x] Fullscreen low-latency video (zero-copy `gtk4paintablesink`, tuned for one-frame latency)
+- [x] Fullscreen low-latency video (GStreamer `appsink` → `wgpu` texture; DMABUF zero-copy path planned)
 - [x] Audio passthrough kept in A/V sync (shared GStreamer pipeline/clock)
 
 Input forwarding
@@ -68,25 +68,26 @@ Config
 | --- | --- |
 | Language | Rust (edition 2024) |
 | Video + audio | GStreamer (`gstreamer-rs`) — one pipeline, `v4l2src` + `pipewiresrc` |
-| Display | GTK4 + libadwaita, `gtk4paintablesink` into a `Gtk.Picture` |
+| Window + GPU | `winit` + `wgpu` (Vulkan); frames from an `appsink` uploaded to a texture |
+| UI | `egui` — a controller-first, immediate-mode 10-foot menu drawn over the video |
 | Controller input | `gilrs` |
 | Input forwarding | `Transport` trait; ADB backend first (Fire TV / Android TV) |
 | Packaging | Flatpak → Flathub → SteamOS Gaming Mode |
 
 ## Build from source
 
-You need a recent stable Rust toolchain and the GTK4/GStreamer development
-libraries.
+You need a recent stable Rust toolchain, the GStreamer development libraries, and
+a Vulkan loader/driver.
 
 ```sh
 # Arch / SteamOS dev tooling
-sudo pacman -S --needed gtk4 libadwaita gstreamer gst-plugins-base \
-  gst-plugins-good gst-plugins-bad glib2 pkgconf
+sudo pacman -S --needed gstreamer gst-plugins-base gst-plugins-good \
+  gst-plugins-bad glib2 pkgconf vulkan-icd-loader
 
 # Debian / Ubuntu
-sudo apt install -y libgtk-4-dev libadwaita-1-dev libgstreamer1.0-dev \
-  libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good \
-  gstreamer1.0-plugins-bad libglib2.0-dev libudev-dev pkg-config
+sudo apt install -y libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad libglib2.0-dev \
+  libudev-dev pkg-config libvulkan-dev
 
 # Build & run
 cargo run -p couchcast
@@ -125,8 +126,8 @@ controller layout so the UI is navigable in Gaming Mode.
 
 ```
 crates/
-  couchcast/            app — GTK4/libadwaita UI, input routing, wiring (the binary)
-  couchcast-media/      capture + display + audio (one GStreamer pipeline)
+  couchcast/            app — winit/wgpu/egui UI + render loop, input routing, wiring (the binary)
+  couchcast-media/      capture + audio + frame export (one GStreamer pipeline → appsink)
   couchcast-input/      gilrs controller reading → device-agnostic events
   couchcast-transport/  Transport trait + RemoteAction model + ADB backend
   couchcast-config/     TOML config: device, video prefs, target, button map

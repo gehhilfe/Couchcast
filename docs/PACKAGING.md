@@ -19,8 +19,10 @@ in lockstep — Flathub's linter treats a mismatch as fatal.
 
 ## Runtime & SDK
 
-- Runtime: `org.gnome.Platform//49` (bundles GTK4, GLib, graphene; layered on the
-  freedesktop base) + `org.gnome.Sdk//49`.
+- Runtime: `org.gnome.Platform//49` (bundles GLib, GStreamer, and Mesa — the
+  Vulkan ICD wgpu needs; layered on the freedesktop base) + `org.gnome.Sdk//49`.
+  Couchcast itself no longer uses GTK, but the GNOME runtime is a convenient
+  source of GStreamer + Mesa; `--device=dri` grants the GPU/Vulkan access.
 - Rust: `org.freedesktop.Sdk.Extension.rust-stable//25.08` — the branch **must**
   equal the runtime's freedesktop base version.
 - Codecs: `org.freedesktop.Platform.ffmpeg-full//25.08` (add-extension) supplies
@@ -29,9 +31,10 @@ in lockstep — Flathub's linter treats a mismatch as fatal.
 > Verify these versions against what's on Flathub before building/submitting —
 > `flatpak remote-info flathub org.gnome.Platform`.
 
-GStreamer core comes from the runtime; **never bundle `libgstreamer`/`libgtk`**
-(symbol clashes). `gtk4paintablesink` is registered in-process from the
-`gst-plugin-gtk4` crate, so it needs no system plugin.
+GStreamer core and Mesa come from the runtime; **never bundle
+`libgstreamer`/`libvulkan`/Mesa** (symbol clashes). The video path uses GStreamer's
+stock `appsink` (no custom or GTK plugin); only custom Rust `gst` plugins, if any,
+would go in `/app/lib/gstreamer-1.0`.
 
 ## Building locally
 

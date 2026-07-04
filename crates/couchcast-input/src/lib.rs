@@ -6,15 +6,15 @@
 //! rather than the raw physical device — reading the raw node fights Steam's
 //! remap and produces double/ghost input.
 //!
-//! This crate turns `gilrs` events into a small, GTK-free, device-agnostic
+//! This crate turns `gilrs` events into a small, UI-toolkit-free, device-agnostic
 //! [`PadEvent`] stream expressed in `couchcast-transport`'s vocabulary. The app
-//! drives [`InputManager::poll`] from the glib main loop and routes the events
+//! drives [`InputManager::poll`] from the winit event loop and routes the events
 //! two ways:
 //!
-//! * **Overlay open** → [`nav_from_pad`] converts them to [`NavEvent`]s that move
-//!   GTK focus (D-pad-only menu navigation).
-//! * **Overlay closed** ("capture mode") → the button map turns them into
-//!   [`RemoteAction`](couchcast_transport::RemoteAction)s forwarded to the target.
+//! * **Menu open** → a [`NavDir`] (from the D-pad or left stick, with
+//!   [`NavRepeater`] hold-to-repeat) moves the owned menu cursor.
+//! * **Menu closed** ("capture mode") → the button map turns each press into a
+//!   [`RemoteAction`](couchcast_transport::RemoteAction) forwarded to the target.
 //!
 //! Keyboard reading (which gamepad crates ignore) will use `evdev`; see
 //! `docs/ROADMAP.md`.
@@ -43,8 +43,9 @@ pub enum PadEvent {
     Disconnected { name: String },
 }
 
-/// A high-level UI navigation intent derived from a [`PadEvent`], used to drive
-/// GTK focus when the settings overlay is open.
+/// A high-level UI navigation intent derived from a [`PadEvent`] — a direction
+/// plus confirm/cancel. (The menu drives its cursor from [`NavDir`]; this richer
+/// intent is kept for reuse.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavEvent {
     Up,
@@ -144,6 +145,82 @@ pub fn nav_from_pad(event: &PadEvent) -> Option<NavEvent> {
     })
 }
 
+/// A pure directional intent (no Activate/Back), used by the menu's hold-to-repeat
+/// cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavDir {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+/// Left-stick deflection past this magnitude counts as a directional press.
+pub const LEFT_STICK_DEADZONE: f32 = 0.5;
+
+/// Convert a left-stick position to a directional intent, or `None` inside the
+/// dead zone. The dominant axis wins. `gilrs` reports `LeftStickY` as +up/-down.
+pub fn stick_to_nav(x: f32, y: f32) -> Option<NavDir> {
+    if x.abs() < LEFT_STICK_DEADZONE && y.abs() < LEFT_STICK_DEADZONE {
+        return None;
+    }
+    if x.abs() >= y.abs() {
+        Some(if x > 0.0 { NavDir::Right } else { NavDir::Left })
+    } else {
+        Some(if y > 0.0 { NavDir::Up } else { NavDir::Down })
+    }
+}
+
+/// Turns a *held* direction into a stream of discrete nav steps: one immediately
+/// on press, then — after an initial delay — repeats at a steady rate while held.
+/// This gives menu navigation the auto-repeat every game UI has, instead of one
+/// step per physical press.
+pub struct NavRepeater {
+    dir: Option<NavDir>,
+    next_fire: Option<std::time::Instant>,
+    initial_delay: std::time::Duration,
+    interval: std::time::Duration,
+}
+
+impl Default for NavRepeater {
+    fn default() -> Self {
+        Self {
+            dir: None,
+            next_fire: None,
+            initial_delay: std::time::Duration::from_millis(400),
+            interval: std::time::Duration::from_millis(90),
+        }
+    }
+}
+
+impl NavRepeater {
+    /// Advance the repeater. `desired` is the direction currently held (from the
+    /// D-pad or left stick), or `None` if neutral. Returns `Some(dir)` on the
+    /// ticks a step should be applied.
+    pub fn tick(&mut self, now: std::time::Instant, desired: Option<NavDir>) -> Option<NavDir> {
+        match desired {
+            None => {
+                self.dir = None;
+                self.next_fire = None;
+                None
+            }
+            Some(d) if self.dir != Some(d) => {
+                // New direction → fire once and arm the initial delay.
+                self.dir = Some(d);
+                self.next_fire = Some(now + self.initial_delay);
+                Some(d)
+            }
+            Some(d) => match self.next_fire {
+                Some(nf) if now >= nf => {
+                    self.next_fire = Some(now + self.interval);
+                    Some(d)
+                }
+                _ => None,
+            },
+        }
+    }
+}
+
 /// Map a `gilrs` button to our normalized [`PadButton`]. `gilrs` already applies
 /// SDL_GameControllerDB mappings, so `LeftTrigger`/`RightTrigger` are the bumpers
 /// (L1/R1) and `LeftTrigger2`/`RightTrigger2` are the analog triggers (L2/R2).
@@ -223,6 +300,46 @@ mod tests {
             pressed: false,
         };
         assert_eq!(nav_from_pad(&ev), None);
+    }
+
+    #[test]
+    fn stick_deadzone_and_dominant_axis() {
+        assert_eq!(stick_to_nav(0.1, -0.2), None);
+        assert_eq!(stick_to_nav(0.9, 0.1), Some(NavDir::Right));
+        assert_eq!(stick_to_nav(-0.9, 0.1), Some(NavDir::Left));
+        assert_eq!(stick_to_nav(0.1, 0.9), Some(NavDir::Up));
+        assert_eq!(stick_to_nav(0.1, -0.9), Some(NavDir::Down));
+    }
+
+    #[test]
+    fn repeater_fires_once_then_repeats_while_held() {
+        use std::time::{Duration, Instant};
+        let mut r = NavRepeater::default();
+        let t0 = Instant::now();
+        // First press fires immediately.
+        assert_eq!(r.tick(t0, Some(NavDir::Down)), Some(NavDir::Down));
+        // Still held, before the initial delay → no fire.
+        assert_eq!(
+            r.tick(t0 + Duration::from_millis(100), Some(NavDir::Down)),
+            None
+        );
+        // Past the initial delay → repeat.
+        assert_eq!(
+            r.tick(t0 + Duration::from_millis(450), Some(NavDir::Down)),
+            Some(NavDir::Down)
+        );
+        // Release clears state.
+        assert_eq!(r.tick(t0 + Duration::from_millis(500), None), None);
+    }
+
+    #[test]
+    fn repeater_refires_on_direction_change() {
+        use std::time::Instant;
+        let mut r = NavRepeater::default();
+        let t0 = Instant::now();
+        assert_eq!(r.tick(t0, Some(NavDir::Up)), Some(NavDir::Up));
+        // Immediately switching direction fires again.
+        assert_eq!(r.tick(t0, Some(NavDir::Left)), Some(NavDir::Left));
     }
 
     #[test]

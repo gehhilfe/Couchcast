@@ -26,5 +26,17 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio.workspace = true
 
-gtk4 = { version = "0.11.4", features = ["v4_14"] }
-adw = { version = "0.9.1", package = "libadwaita", features = ["v1_5"] }
+# Game-native render/UI stack (replaces GTK4/libadwaita): winit owns the window
+# and event loop, wgpu the GPU, egui the immediate-mode UI drawn over the live
+# video texture. See docs/ARCHITECTURE.md and the plan for the rationale.
+# wgpu is pinned to 29 to match egui-wgpu 0.35 (egui and the video texture must
+# share one wgpu Device). The turnkey DMABUF import landed in wgpu 30; on 29 the
+# zero-copy path uses the wgpu-hal `texture_from_raw` escape hatch instead.
+winit = { version = "0.30", features = ["x11", "wayland"] }
+wgpu = { version = "29", features = ["vulkan"] }
+egui = "0.35"
+egui-wgpu = "0.35"
+egui-winit = { version = "0.35", default-features = false, features = ["x11", "wayland"] }
+raw-window-handle = "0.6"
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }

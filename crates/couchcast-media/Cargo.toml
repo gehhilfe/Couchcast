@@ -6,12 +6,13 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Capture + display + audio for Couchcast: a single low-latency GStreamer pipeline (v4l2src video + pipewire audio) rendered zero-copy via gtk4paintablesink."
+description = "Capture + display + audio for Couchcast: a single low-latency GStreamer pipeline (v4l2src video + pipewire audio) exported as frames via appsink for a wgpu renderer."
 
 [dependencies]
-gst-plugin-gtk4 = { version = "0.15.2", features = ["wayland", "dmabuf"] }
 gstreamer = "0.25.3"
+gstreamer-app = "0.25.2"
 gstreamer-video = "0.25.3"
-gtk4 = { version = "0.11.4", features = ["v4_14"] }
+gstreamer-allocators = "0.25.3"
+smallvec = "1"
 thiserror.workspace = true
 tracing.workspace = true
