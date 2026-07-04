@@ -6,7 +6,7 @@
 
 ## Checklist
 
-- [ ] `cargo xtask ci` passes (fmt, clippy, tests)
+- [ ] Builds and `ctest --test-dir build` passes
 - [ ] New behavior is covered by tests where practical
 - [ ] Docs updated (`README.md` / `docs/`) if behavior or setup changed
 - [ ] I agree to license my contribution under MIT OR Apache-2.0

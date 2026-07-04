@@ -1,9 +1,3 @@
-# Rust / Cargo
-/target
-**/*.rs.bk
-*.pdb
-Cargo.lock.orig
-
 # Flatpak build artifacts
 /.flatpak-builder/
 /build/
@@ -11,6 +5,10 @@ Cargo.lock.orig
 /repo/
 *.flatpak
 /flatpak/generated-sources.json
+
+# C++ / CMake port
+/build/
+/third_party/imgui/
 
 # Editor / OS
 .idea/

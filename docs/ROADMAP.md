@@ -10,7 +10,7 @@ The smallest slice that exercises every load-bearing subsystem on real hardware:
 
 - [ ] Play live video **and** PCM audio from an HDMI capture dongle, A/V-synced,
       through the single GStreamer pipeline.
-- [ ] Read the Steam Virtual Gamepad via `gilrs` and forward D-pad + Select/Back
+- [ ] Read the Steam Virtual Gamepad via SDL3 and forward D-pad + Select/Back
       to a Fire TV over ADB-over-TCP using the persistent shell.
 - [ ] Confirm the settings overlay is fully navigable with a controller.
 
@@ -37,7 +37,7 @@ abstraction, and the Flatpak sandbox all work together.
         metadata instead of the fixed 1000-nit assumption.
       - Pass BT.2020 wide gamut through in HDR mode (currently the BT.2020→BT.709
         conversion clamps out-of-709 colours) once a target-gamut probe exists.
-      - The egui overlay renders at the scRGB reference white (~80 nits) in HDR
+      - The ImGui overlay renders at the scRGB reference white (~80 nits) in HDR
         mode; composite it at a configurable paper-white if it reads too dim.
       - On-device validation under gamescope HDR (SteamOS) and a Wayland
         `color-management` compositor.
@@ -48,28 +48,27 @@ abstraction, and the Flatpak sandbox all work together.
       then stream raw packets (~10–30 ms) instead of `input keyevent` (JVM cost).
 - [ ] **Analog stick forwarding** — requires the `sendevent` path (no `input`
       analog equivalent).
-- [ ] **Keyboard forwarding** — `gilrs` ignores keyboards; read via `evdev`.
+- [ ] **Keyboard forwarding** — the SDL3 gamepad path ignores keyboards; read via `evdev`.
 - [ ] **Deterministic pad selection** — match by VID/PID/name, tolerate
       "Steam Virtual Gamepad 0/1" duplicates and Steam's controller reorder.
 
 ## Transport backends
 
-The `Transport` trait exists; these are feature-gated placeholders today.
+The `Transport` interface exists; these are planned backends today.
 
-- [ ] **Bluetooth-HID** (`bluetooth` feature) — host advertises as a BT
-      keyboard/gamepad; works on Fire TV / Android TV / Apple TV with no dev mode.
-      Real work: BlueZ classic HID profile is incomplete, so expect hand-rolled
-      SDP + L2CAP (PSM 0x11/0x13) or a D-Bus `Profile1`. Needs
-      `--system-talk-name=org.bluez`.
-- [ ] **Roku ECP** (`roku` feature) — trivial HTTP (`POST /keypress/<Key>`) +
-      SSDP discovery; near-free once wired.
-- [ ] **HDMI-CEC** (`cec` feature) — via `cec-rs`/`libcec`; needs a CEC-capable
-      adapter (most capture cards don't expose the CEC line). Navigation/media
-      only.
-- [ ] **Android TV Remote v2 / Apple TV** — no maintained Rust crate; would mean
-      porting the reverse-engineered protocols or running a sidecar. Defer.
-- [ ] Migrate the ADB backend from the system `adb` binary to the pure-Rust
-      `adb_client` crate so nothing extra needs bundling in the Flatpak.
+- [ ] **Bluetooth-HID** — host advertises as a BT keyboard/gamepad; works on
+      Fire TV / Android TV / Apple TV with no dev mode. Real work: BlueZ classic
+      HID profile is incomplete, so expect hand-rolled SDP + L2CAP
+      (PSM 0x11/0x13) or a D-Bus `Profile1`. Needs `--system-talk-name=org.bluez`.
+- [ ] **Roku ECP** — trivial HTTP (`POST /keypress/<Key>`) + SSDP discovery;
+      near-free once wired.
+- [ ] **HDMI-CEC** — via `libcec`; needs a CEC-capable adapter (most capture
+      cards don't expose the CEC line). Navigation/media only.
+- [ ] **Android TV Remote v2 / Apple TV** — no off-the-shelf C/C++ client; would
+      mean implementing the reverse-engineered protocols or running a sidecar.
+      Defer.
+- [ ] Talk the ADB wire protocol directly instead of shelling out to the system
+      `adb` binary, so nothing extra needs bundling in the Flatpak.
 - [ ] Device discovery (mDNS/SSDP) + reconnect/backoff + a per-device capability
       map.
 
@@ -85,7 +84,8 @@ The `Transport` trait exists; these are feature-gated placeholders today.
 
 - [ ] Real screenshots for the AppStream MetaInfo (Flathub requires public https
       URLs).
-- [ ] Generate `flatpak/cargo-sources.json` in CI on every `Cargo.lock` change.
+- [ ] Pin/verify the bundled-dependency module versions (SDL3, shaderc, toml++,
+      ASIO, Dear ImGui) for a reproducible offline Flathub build.
 - [ ] Flathub submission (reverse-DNS id `io.github.gehhilfe.Couchcast`).
 - [ ] Document the `--device=all` justification for Flathub review, and evaluate
       the Camera portal alternative.

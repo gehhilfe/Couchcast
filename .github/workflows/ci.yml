@@ -5,40 +5,34 @@ on:
     branches: [main]
   pull_request:
 
-env:
-  CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
-
 jobs:
   build:
-    name: fmt · clippy · test
+    name: build · test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libgtk-4-dev libadwaita-1-dev \
+            cmake ninja-build g++ pkg-config \
+            libsdl3-dev libvulkan-dev vulkan-headers glslc \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev \
-            libudev-dev
+            libglib2.0-dev libasio-dev libtomlplusplus-dev
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - name: Vendor Dear ImGui
+        run: git clone --depth 1 --branch v1.92.1 https://github.com/ocornut/imgui.git third_party/imgui
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo
 
-      - name: Format
-        run: cargo fmt --all --check
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Build
+        run: cmake --build build
 
       - name: Test
-        run: cargo test --workspace
+        run: ctest --test-dir build --output-on-failure
 
   metadata:
     name: appstream · desktop

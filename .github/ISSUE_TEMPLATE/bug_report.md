@@ -21,7 +21,7 @@ assignees: ''
 ## Environment
 
 - Couchcast version / commit:
-- Install method: <!-- Flatpak / cargo build -->
+- Install method: <!-- Flatpak / source build -->
 - Host: <!-- Steam Deck (SteamOS x.y) / Arch / Fedora / … -->
 - GPU: <!-- AMD / Intel / NVIDIA -->
 - Capture device (make/model, and `v4l2-ctl --list-devices` output):

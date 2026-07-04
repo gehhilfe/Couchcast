@@ -1,31 +1,23 @@
-# Flatpak manifest for Couchcast.
+# Flatpak manifest for Couchcast (C++ / CMake port).
 #
 # Runtime/SDK versions were current as of mid-2026 — verify against what is on
-# Flathub (`flatpak remote-info flathub org.gnome.Platform`) before submitting,
-# and keep the rust-stable extension branch equal to the GNOME runtime's
-# freedesktop base version.
+# Flathub (`flatpak remote-info flathub org.gnome.Platform`) before submitting.
 #
 # Build & test locally:
-#   1. cargo xtask cargo-sources        # regenerate cargo-sources.json from Cargo.lock
-#   2. flatpak install flathub org.gnome.Platform//49 org.gnome.Sdk//49 \
-#        org.freedesktop.Sdk.Extension.rust-stable//25.08 \
+#   1. flatpak install flathub org.gnome.Platform//49 org.gnome.Sdk//49 \
 #        org.freedesktop.Platform.ffmpeg-full//25.08
-#   3. flatpak run org.flatpak.Builder --user --install --force-clean \
+#   2. flatpak run org.flatpak.Builder --user --install --force-clean \
 #        build-dir flatpak/io.github.gehhilfe.Couchcast.yml
-#   4. flatpak run org.flatpak.Builder --user --lint manifest \
+#   3. flatpak run org.flatpak.Builder --user --lint manifest \
 #        flatpak/io.github.gehhilfe.Couchcast.yml
 app-id: io.github.gehhilfe.Couchcast
 runtime: org.gnome.Platform
 runtime-version: '49'
 sdk: org.gnome.Sdk
-sdk-extensions:
-  - org.freedesktop.Sdk.Extension.rust-stable
 command: couchcast
 
 build-options:
-  append-path: /usr/lib/sdk/rust-stable/bin
   env:
-    CARGO_HOME: /run/build/couchcast/cargo
     # H.264/H.265/AAC decoders come from the ffmpeg-full extension below.
     GST_PLUGIN_SYSTEM_PATH: /app/lib/gstreamer-1.0:/usr/lib/gstreamer-1.0
 
@@ -53,6 +45,11 @@ finish-args:
   - --device=all
   # ADB / adb-connect to the target device over the network.
   - --share=network
+  # Read-only access to the host's ADB auth key so the sandboxed `adb` presents
+  # the key the target already paired with, instead of generating an
+  # unauthorized one. The app exports ANDROID_VENDOR_KEYS to point here even
+  # though the sandbox remaps $HOME. See docs/PACKAGING.md.
+  - --filesystem=~/.android:ro
   # Bluetooth-HID backend (deferred) talks to BlueZ on the SYSTEM bus.
   - --system-talk-name=org.bluez
 
@@ -62,28 +59,95 @@ modules:
     build-commands:
       - mkdir -p /app/lib/ffmpeg
 
-  - name: couchcast
+  # Bundle Google's prebuilt `adb` so end users don't need a system
+  # android-tools. The ADB backend shells out to `adb` from PATH (/app/bin is on
+  # PATH inside the sandbox); without this the transport silently fails to spawn.
+  # Building AOSP platform-tools from source in Flatpak is impractical, so the
+  # official prebuilt binary is used (a recognized exception for adb). It is a
+  # single, self-contained x86_64 ELF linking only the runtime's glibc/libgcc —
+  # no extra shared objects ship alongside it. Bump `url` + `sha256` together to
+  # update; `strip-components` (default 1) drops the leading platform-tools/ dir.
+  - name: android-platform-tools
     buildsystem: simple
+    only-arches:
+      - x86_64  # Google ships platform-tools for linux x86_64 only (covers Steam Deck/PC).
+    sources:
+      - type: archive
+        url: https://dl.google.com/android/repository/platform-tools_r35.0.2-linux.zip
+        sha256: acfdcccb123a8718c46c46c059b2f621140194e5ec1ac9d81715be3d6ab6cd0a
+    build-commands:
+      - install -Dm755 adb /app/bin/adb
+
+  # --- C/C++ dependencies not provided by org.gnome.Platform ------------------
+  # GStreamer core, GLib, and Mesa's Vulkan ICD come from the runtime and must
+  # NOT be bundled (symbol clashes). Everything below is a build dependency the
+  # runtime does not ship. Verify each `tag`/version before submitting.
+
+  # shaderc's `glslc` compiles GLSL -> SPIR-V at build time (embedded as C headers
+  # via `glslc -mfmt=c`; see CMakeLists.txt). Bundled third-party sources are
+  # fetched by git-sync-deps; it is a build-only tool and is cleaned out.
+  - name: shaderc
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DSHADERC_SKIP_TESTS=ON
+      - -DSHADERC_SKIP_EXAMPLES=ON
+      - -DSHADERC_SKIP_COPYRIGHT_CHECK=ON
+    cleanup:
+      - '*'  # build-time only; nothing from shaderc ships in the app.
+    sources:
+      - type: git
+        url: https://github.com/google/shaderc.git
+        tag: v2024.1
+      - type: shell
+        commands:
+          - ./utils/git-sync-deps
+
+  # SDL3: windowing + gamepad input (the Steam Virtual Gamepad). Not in the runtime.
+  - name: sdl3
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DSDL_TEST_LIBRARY=OFF
+    sources:
+      - type: git
+        url: https://github.com/libsdl-org/SDL.git
+        tag: release-3.2.0
+
+  # toml++ (header-only) — config parsing.
+  - name: tomlplusplus
+    buildsystem: meson
+    sources:
+      - type: git
+        url: https://github.com/marzer/tomlplusplus.git
+        tag: v3.4.0
+
+  # ASIO standalone (header-only) — the transport worker's I/O context.
+  - name: asio
+    buildsystem: simple
+    build-commands:
+      - cp -r asio/include/* /app/include/
+    sources:
+      - type: git
+        url: https://github.com/chriskohlhoff/asio.git
+        tag: asio-1-30-2
+
+  - name: couchcast
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=RelWithDebInfo
+    # CMake installs the binary, desktop entry, and icon into /app (the prefix).
     sources:
       # For a Flathub submission this is the tagged release tarball/commit:
       - type: git
         url: https://github.com/gehhilfe/Couchcast.git
         tag: v0.1.0
-      # Offline crate sources, generated by `cargo xtask cargo-sources`:
-      - cargo-sources.json
+      # Dear ImGui is vendored under third_party/imgui (gitignored, absent from the
+      # release tarball), so fetch it here into that path.
+      - type: git
+        url: https://github.com/ocornut/imgui.git
+        tag: v1.92.1
+        dest: third_party/imgui
       # For LOCAL builds, comment out the git source above and use:
       # - type: dir
       #   path: ..
-    build-options:
-      env:
-        CARGO_NET_OFFLINE: 'true'
-    build-commands:
-      - cargo --offline fetch --manifest-path Cargo.toml --verbose
-      - cargo build --offline --release -p couchcast
-      - install -Dm755 target/release/couchcast /app/bin/couchcast
-      - install -Dm644 data/io.github.gehhilfe.Couchcast.desktop
-          /app/share/applications/io.github.gehhilfe.Couchcast.desktop
-      - install -Dm644 data/io.github.gehhilfe.Couchcast.metainfo.xml
-          /app/share/metainfo/io.github.gehhilfe.Couchcast.metainfo.xml
-      - install -Dm644 data/icons/io.github.gehhilfe.Couchcast.svg
-          /app/share/icons/hicolor/scalable/apps/io.github.gehhilfe.Couchcast.svg

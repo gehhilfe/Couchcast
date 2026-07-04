@@ -12,28 +12,30 @@ a development environment running and what we expect from contributions.
 
 ## Development environment
 
-Couchcast is a Rust application built on GStreamer, with a `winit`/`wgpu`/`egui`
-render layer (Vulkan). You need a recent stable Rust toolchain (see
-[`rust-toolchain.toml`](rust-toolchain.toml)) plus the native development
-libraries and a Vulkan loader/driver.
+Couchcast is a C++20 application built on GStreamer, with an SDL3 / Vulkan / Dear
+ImGui render layer. You need a C++20 compiler, CMake + Ninja, `glslc` (from
+shaderc), the native development libraries, and a Vulkan loader/driver. Dear
+ImGui is vendored under `third_party/imgui`.
 
 ### System dependencies
 
 On an Arch-based system (including SteamOS's dev tooling):
 
 ```sh
-sudo pacman -S --needed \
+sudo pacman -S --needed cmake ninja gcc \
+  sdl3 vulkan-headers vulkan-icd-loader shaderc \
   gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad \
-  glib2 pkgconf vulkan-icd-loader
+  glib2 pkgconf asio tomlplusplus
 ```
 
 On Debian/Ubuntu:
 
 ```sh
-sudo apt install -y \
+sudo apt install -y cmake ninja-build g++ pkg-config \
+  libsdl3-dev libvulkan-dev vulkan-headers glslc \
   libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
-  libglib2.0-dev pkg-config libvulkan-dev
+  libglib2.0-dev libasio-dev libtomlplusplus-dev
 ```
 
 For input forwarding to a Fire TV / Android TV target during development you also
@@ -42,24 +44,25 @@ need the Android platform tools (`adb`).
 ### Build & run
 
 ```sh
-cargo build
-cargo run -p couchcast
+git clone --depth 1 --branch v1.92.1 https://github.com/ocornut/imgui.git third_party/imgui
+cmake -S . -B build -G Ninja
+cmake --build build
+./build/couchcast
 ```
 
 ### Before you push
 
 ```sh
-cargo fmt --all
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all
+cmake --build build
+ctest --test-dir build --output-on-failure
 ```
 
-CI runs the same checks; PRs must be green.
+CI runs the same build and tests; PRs must be green.
 
 ## Project layout
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for a tour of the crates and
-how video, audio, input reading and input forwarding fit together.
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for a tour of the source tree
+and how video, audio, input reading and input forwarding fit together.
 
 ## Commit style
 
