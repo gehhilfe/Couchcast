@@ -105,6 +105,14 @@ the device, note its IP, then set it in Couchcast's settings screen.
 
 Verbose logs: `RUST_LOG=couchcast=debug cargo run -p couchcast`.
 
+Debug the controller mapping with an on-screen HUD of the buttons you're
+currently holding — handy for confirming what Steam Input actually forwards,
+including the Guide/Steam button under Gaming Mode / Big Picture:
+
+```sh
+cargo run -p couchcast --features debug-input-hud
+```
+
 ## Install on SteamOS (Flatpak)
 
 Once released on Flathub this will be a one-click install; until then you can

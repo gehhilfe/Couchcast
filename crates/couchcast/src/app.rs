@@ -26,6 +26,7 @@ use couchcast_input::{InputManager, NavEvent, PadEvent, nav_from_pad};
 use couchcast_media::{CaptureDevice, CapturePipeline, PipelineConfig, list_devices};
 use couchcast_transport::{PadButton, TargetAddr};
 
+use crate::hud::ButtonHud;
 use crate::worker::TransportWorker;
 
 /// Reverse-DNS application id, matching the GitHub repository `gehhilfe/Couchcast`
@@ -50,6 +51,9 @@ struct AppState {
     overlay_visible: bool,
     pressed: HashSet<PadButton>,
     chord_active: bool,
+    /// Debug HUD of currently-held buttons; a no-op unless the `debug-input-hud`
+    /// feature is enabled.
+    hud: ButtonHud,
 }
 
 /// Build the libadwaita application and hook up activation.
@@ -90,6 +94,11 @@ fn build_ui(app: &adw::Application) {
     panel.container.set_visible(false);
     overlay.add_overlay(&panel.container);
 
+    // Optional debug HUD of currently-held buttons. Built only with the
+    // `debug-input-hud` feature; a zero-cost no-op otherwise.
+    let hud = ButtonHud::new();
+    hud.attach(&overlay);
+
     window.set_content(Some(&overlay));
 
     let input = match InputManager::new() {
@@ -105,6 +114,10 @@ fn build_ui(app: &adw::Application) {
             return;
         }
     };
+
+    // Seed the debug HUD with whatever controllers gilrs already sees, so the
+    // "Pads" line is meaningful before the first event arrives.
+    hud.set_devices(&input.connected_names());
 
     let first_control: gtk::Widget = if devices.is_empty() {
         panel.transport_dropdown.clone().upcast()
@@ -126,6 +139,7 @@ fn build_ui(app: &adw::Application) {
         overlay_visible: false,
         pressed: HashSet::new(),
         chord_active: false,
+        hud,
     }));
 
     // Start the pipeline on the remembered device, else the first found device.
@@ -212,12 +226,20 @@ fn handle_pad_event(state: &Rc<RefCell<AppState>>, event: PadEvent) {
     // Track pressed buttons and detect the Start+Select overlay-toggle chord.
     let toggle = {
         let mut s = state.borrow_mut();
-        if let PadEvent::Button { button, pressed } = &event {
-            if *pressed {
-                s.pressed.insert(*button);
-            } else {
-                s.pressed.remove(button);
+        match &event {
+            PadEvent::Button { button, pressed } => {
+                if *pressed {
+                    s.pressed.insert(*button);
+                } else {
+                    s.pressed.remove(button);
+                }
+                s.hud.update(&s.pressed);
             }
+            PadEvent::Connected { .. } | PadEvent::Disconnected { .. } => {
+                let names = s.input.connected_names();
+                s.hud.set_devices(&names);
+            }
+            _ => {}
         }
         let chord = s.pressed.contains(&PadButton::Start) && s.pressed.contains(&PadButton::Select);
         if chord && !s.chord_active {

@@ -9,6 +9,12 @@ repository.workspace = true
 description = "Couchcast — play an HDMI capture device fullscreen on Linux and forward controller input back to it. Built for SteamOS Gaming Mode."
 default-run = "couchcast"
 
+[features]
+# Overlay a live HUD of the controller buttons currently held. A local
+# debugging aid for verifying what Steam Input forwards (including the
+# Guide/Steam button); off by default so release builds carry no HUD.
+debug-input-hud = []
+
 [dependencies]
 couchcast-config.workspace = true
 couchcast-input.workspace = true
