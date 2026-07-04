@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="128" height="128" viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b6cb0"/>
+      <stop offset="1" stop-color="#153e63"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="112" height="112" rx="26" fill="url(#bg)"/>
+  <!-- cast waves emanating from the couch -->
+  <g fill="none" stroke="#cfe8ff" stroke-width="5" stroke-linecap="round">
+    <path d="M40 46a30 30 0 0 1 30 30" opacity="0.9"/>
+    <path d="M40 60a16 16 0 0 1 16 16" opacity="0.9"/>
+  </g>
+  <circle cx="41" cy="75" r="4.5" fill="#cfe8ff"/>
+  <!-- couch -->
+  <g fill="#f4f9ff">
+    <rect x="34" y="80" width="60" height="18" rx="6"/>
+    <rect x="30" y="66" width="14" height="26" rx="6"/>
+    <rect x="84" y="66" width="14" height="26" rx="6"/>
+    <rect x="42" y="70" width="44" height="16" rx="5" opacity="0.85"/>
+    <rect x="40" y="96" width="8" height="10" rx="2"/>
+    <rect x="80" y="96" width="8" height="10" rx="2"/>
+  </g>
+</svg>

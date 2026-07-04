@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 The Couchcast Authors -->
+<component type="desktop-application">
+  <id>io.github.gehhilfe.Couchcast</id>
+
+  <name>Couchcast</name>
+  <summary>Watch an HDMI capture device and control it with a gamepad</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+
+  <developer id="io.github.gehhilfe">
+    <name>The Couchcast Authors</name>
+  </developer>
+
+  <description>
+    <p>
+      Couchcast turns a Fire TV, Android TV box, or other streaming stick captured
+      over HDMI into what feels like a native app on your Linux PC or Steam Deck.
+      It shows the live low-latency video and audio full-screen and forwards your
+      controller and keyboard input back to the device, so you can navigate and
+      play from the couch with just a gamepad.
+    </p>
+    <p>Features:</p>
+    <ul>
+      <li>Low-latency full-screen video from any V4L2 HDMI capture device</li>
+      <li>Audio passthrough kept in sync with the video</li>
+      <li>Controller input forwarded to the device (Fire TV / Android TV over ADB)</li>
+      <li>Editable button mapping</li>
+      <li>Fully controller-navigable — no mouse required, built for SteamOS Gaming Mode</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">io.github.gehhilfe.Couchcast.desktop</launchable>
+
+  <!--
+    Screenshots MUST be reachable public https URLs when submitting to Flathub.
+    Replace these placeholders with real screenshots hosted in the repository
+    (e.g. via raw.githubusercontent.com) before opening the Flathub PR.
+  -->
+  <screenshots>
+    <screenshot type="default">
+      <caption>Live capture playing full screen</caption>
+      <image>https://raw.githubusercontent.com/gehhilfe/Couchcast/main/data/screenshots/fullscreen.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Controller-navigable settings overlay</caption>
+      <image>https://raw.githubusercontent.com/gehhilfe/Couchcast/main/data/screenshots/settings.png</image>
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://github.com/gehhilfe/Couchcast</url>
+  <url type="bugtracker">https://github.com/gehhilfe/Couchcast/issues</url>
+  <url type="vcs-browser">https://github.com/gehhilfe/Couchcast</url>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Player</category>
+  </categories>
+
+  <content_rating type="oars-1.1" />
+
+  <branding>
+    <color type="primary" scheme_preference="light">#c0e3ff</color>
+    <color type="primary" scheme_preference="dark">#123a5e</color>
+  </branding>
+
+  <releases>
+    <release version="0.1.0" date="2026-07-04">
+      <description>
+        <p>Initial project scaffold: capture pipeline, input forwarding, and settings UI.</p>
+      </description>
+    </release>
+  </releases>
+</component>

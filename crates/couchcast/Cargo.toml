@@ -1,0 +1,24 @@
+[package]
+name = "couchcast"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Couchcast — play an HDMI capture device fullscreen on Linux and forward controller input back to it. Built for SteamOS Gaming Mode."
+default-run = "couchcast"
+
+[dependencies]
+couchcast-config.workspace = true
+couchcast-input.workspace = true
+couchcast-media.workspace = true
+couchcast-transport.workspace = true
+
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tokio.workspace = true
+
+gtk4 = { version = "0.11.4", features = ["v4_14"] }
+adw = { version = "0.9.1", package = "libadwaita", features = ["v1_5"] }

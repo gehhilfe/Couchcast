@@ -1,0 +1,28 @@
+# Rust / Cargo
+/target
+**/*.rs.bk
+*.pdb
+Cargo.lock.orig
+
+# Flatpak build artifacts
+/.flatpak-builder/
+/build/
+/build-dir/
+/repo/
+*.flatpak
+/flatpak/generated-sources.json
+
+# Editor / OS
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*~
+.DS_Store
+
+# Local runtime config produced by the app during development
+/.local-config/
+
+# Environment
+.env
+.direnv/

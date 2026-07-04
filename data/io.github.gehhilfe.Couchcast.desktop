@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Couchcast
+GenericName=HDMI Capture Viewer
+Comment=Play an HDMI capture device fullscreen and forward controller input back to it
+Exec=couchcast
+Icon=io.github.gehhilfe.Couchcast
+Terminal=false
+Categories=AudioVideo;Player;Game;
+Keywords=HDMI;capture;V4L2;streaming;Fire TV;Android TV;SteamOS;
+StartupNotify=true

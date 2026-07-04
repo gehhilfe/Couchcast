@@ -1,0 +1,17 @@
+[package]
+name = "couchcast-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Persistent configuration for Couchcast: last-used device, video preferences, target transport, and the editable button map."
+
+[dependencies]
+couchcast-transport.workspace = true
+serde.workspace = true
+toml.workspace = true
+directories.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

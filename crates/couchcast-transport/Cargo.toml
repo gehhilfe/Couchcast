@@ -1,0 +1,31 @@
+[package]
+name = "couchcast-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Input-forwarding transport abstraction for Couchcast: a device-agnostic RemoteAction model and pluggable backends (ADB/Fire TV first)."
+
+[features]
+# ADB-over-TCP to Fire TV / Android TV is the only fully-built MVP backend.
+default = ["adb"]
+adb = []
+# Deferred backends — the modules exist as documented placeholders so the
+# Transport trait's pluggability is visible; enabling the feature compiles a
+# stub that returns `NotImplemented` until the real backend lands.
+bluetooth = []
+cec = []
+roku = []
+
+[dependencies]
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt"] }
