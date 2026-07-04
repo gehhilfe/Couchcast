@@ -68,7 +68,11 @@ fn build_ui(app: &adw::Application) {
         .default_width(1280)
         .default_height(720)
         .build();
-    window.fullscreen();
+    // Fullscreen for real use; set COUCHCAST_WINDOWED=1 to run in a normal window
+    // (handy for development, especially on a tiling window manager).
+    if std::env::var_os("COUCHCAST_WINDOWED").is_none() {
+        window.fullscreen();
+    }
 
     // Live video fills the window; the settings panel floats on top.
     let picture = gtk::Picture::new();
@@ -159,6 +163,27 @@ fn build_ui(app: &adw::Application) {
         close_state.borrow().worker.disconnect();
         glib::Propagation::Proceed
     });
+
+    // Keyboard fallback for the overlay: F1 (or the Menu key) toggles it, Escape
+    // closes it. This makes the whole UI usable without a controller — GTK then
+    // handles arrow/Tab focus and Enter to activate natively.
+    let key_controller = gtk::EventControllerKey::new();
+    let key_state = state.clone();
+    key_controller.connect_key_pressed(move |_, key, _code, _mods| {
+        use gtk::gdk::Key;
+        match key {
+            Key::F1 | Key::Menu => {
+                toggle_overlay(&key_state);
+                glib::Propagation::Stop
+            }
+            Key::Escape if key_state.borrow().overlay_visible => {
+                toggle_overlay(&key_state);
+                glib::Propagation::Stop
+            }
+            _ => glib::Propagation::Proceed,
+        }
+    });
+    window.add_controller(key_controller);
 
     wire_settings(&state, &panel);
 
@@ -406,7 +431,7 @@ fn build_settings_panel(devices: &[CaptureDevice]) -> SettingsPanel {
     button_row.append(&connect_button);
     container.append(&button_row);
 
-    let status = gtk::Label::new(Some("Press Start + Select to open this menu."));
+    let status = gtk::Label::new(Some("Press Start + Select (or F1) to open this menu."));
     status.add_css_class("dim-label");
     status.set_wrap(true);
     container.append(&status);
