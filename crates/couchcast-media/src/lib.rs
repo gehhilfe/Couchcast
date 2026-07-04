@@ -18,7 +18,9 @@ mod error;
 mod frame;
 mod pipeline;
 
-pub use device::{CaptureDevice, list_devices};
+pub use device::{
+    CaptureCodec, CaptureDevice, CaptureFormat, codecs, framerates, list_devices, resolutions,
+};
 pub use error::MediaError;
 pub use frame::{PixelFormat, PlaneRef, VideoFrame};
 pub use pipeline::{CapturePipeline, PipelineConfig};

@@ -13,6 +13,7 @@ gstreamer = "0.25.3"
 gstreamer-app = "0.25.2"
 gstreamer-video = "0.25.3"
 gstreamer-allocators = "0.25.3"
+v4l = "0.14"
 smallvec = "1"
 thiserror.workspace = true
 tracing.workspace = true

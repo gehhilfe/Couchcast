@@ -106,13 +106,14 @@ the device, note its IP, then set it in Couchcast's settings screen.
 
 Verbose logs: `RUST_LOG=couchcast=debug cargo run -p couchcast`.
 
-Debug the controller mapping with an on-screen HUD of the buttons you're
-currently holding — handy for confirming what Steam Input actually forwards,
-including the Guide/Steam button under Gaming Mode / Big Picture:
-
-```sh
-cargo run -p couchcast --features debug-input-hud
-```
+Toggle an on-screen **debug overlay** any time with **F3** (or click **L3 + R3**
+on the controller) — no rebuild needed. It shows render/capture FPS, the live
+frame resolution and pixel format, the selected device and requested capture
+mode, the GPU adapter, the transport target, and the controller diagnostics from
+the old input HUD (connected pads, held buttons, and stick position) — handy for
+confirming what Steam Input actually forwards, including the Guide/Steam button
+under Gaming Mode / Big Picture. Start it already visible with
+`COUCHCAST_DEBUG=1`.
 
 ## Install on SteamOS (Flatpak)
 

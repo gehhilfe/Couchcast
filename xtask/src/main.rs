@@ -17,7 +17,7 @@ fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let command = args.next();
     // Remaining args are forwarded verbatim to the command's cargo build (e.g.
-    // `cargo xtask install --features debug-input-hud`).
+    // `cargo xtask install --locked`).
     let rest: Vec<String> = args.collect();
     match command.as_deref() {
         Some("install") => install(&rest),
@@ -42,7 +42,7 @@ fn print_help() {
         "cargo xtask <command> [cargo build args]\n\n\
          Commands:\n\
          \x20 install         Build release + install binary/desktop/icon into ~/.local (ready to add to Steam)\n\
-         \x20                 Extra args pass through to the build, e.g. install --features debug-input-hud\n\
+         \x20                 Extra args pass through to the build, e.g. install --locked\n\
          \x20 cargo-sources   Regenerate {CARGO_SOURCES} from Cargo.lock (needs flatpak-cargo-generator.py)\n\
          \x20 flatpak-build   Build and install the Flatpak locally via org.flatpak.Builder\n\
          \x20 flatpak-lint    Run flatpak-builder-lint and appstreamcli validate\n\
@@ -147,8 +147,8 @@ fn ci() -> Result<()> {
 /// non-Steam game. The desktop entry's `Exec` is rewritten to the absolute
 /// installed path so it launches regardless of `PATH`.
 ///
-/// `cargo_args` are appended to the `cargo build` invocation, so callers can opt
-/// into features (e.g. `--features debug-input-hud`) at install time.
+/// `cargo_args` are appended to the `cargo build` invocation, so callers can pass
+/// extra cargo flags (e.g. `--locked`) at install time.
 fn install(cargo_args: &[String]) -> Result<()> {
     let root = workspace_root();
     let mut build_args = vec!["build", "--release", "-p", "couchcast"];

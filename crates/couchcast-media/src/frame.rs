@@ -22,6 +22,15 @@ pub enum PixelFormat {
     Nv12,
 }
 
+impl PixelFormat {
+    /// A short label for logs and the debug overlay.
+    pub fn label(&self) -> &'static str {
+        match self {
+            PixelFormat::Nv12 => "NV12",
+        }
+    }
+}
+
 /// The GStreamer caps string the video appsink negotiates. Kept next to the
 /// [`PixelFormat`] it must stay in sync with.
 pub(crate) const NEGOTIATED_FORMAT: &str = "NV12";

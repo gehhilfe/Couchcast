@@ -84,6 +84,8 @@ pub struct Renderer {
     video_sampler: wgpu::Sampler,
     scale_buf: wgpu::Buffer,
     video: Option<VideoResources>,
+    /// One-line summary of the selected GPU adapter, for the debug overlay.
+    adapter_info: String,
 }
 
 impl Renderer {
@@ -112,7 +114,9 @@ impl Renderer {
                 compatible_surface: Some(&surface),
             })
             .await?;
-        tracing::info!(adapter = ?adapter.get_info(), "selected GPU adapter");
+        let info = adapter.get_info();
+        tracing::info!(adapter = ?info, "selected GPU adapter");
+        let adapter_info = format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type);
 
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
@@ -232,7 +236,13 @@ impl Renderer {
             video_sampler,
             scale_buf,
             video: None,
+            adapter_info,
         })
+    }
+
+    /// A one-line summary of the selected GPU adapter (name, backend, type).
+    pub fn adapter_info(&self) -> &str {
+        &self.adapter_info
     }
 
     /// Reconfigure the swapchain after a resize.

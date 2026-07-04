@@ -5,7 +5,7 @@
 //! texture. See [`app`] for the `ApplicationHandler` and [`render`] for wgpu.
 
 mod app;
-mod hud;
+mod debug;
 mod menu;
 mod render;
 mod worker;

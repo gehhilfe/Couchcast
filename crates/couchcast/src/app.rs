@@ -16,16 +16,21 @@ use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use couchcast_config::{Config, DeviceRef, TargetConfig, TransportKind};
+use couchcast_config::{
+    CaptureCodec as ConfigCodec, Config, DeviceRef, TargetConfig, TransportKind,
+};
 use couchcast_input::{InputManager, NavDir, NavRepeater, PadEvent, stick_to_nav};
-use couchcast_media::{CaptureDevice, CapturePipeline, PipelineConfig, VideoFrame, list_devices};
+use couchcast_media::{
+    CaptureCodec as MediaCodec, CaptureDevice, CapturePipeline, PipelineConfig, VideoFrame,
+    list_devices,
+};
 use couchcast_transport::{PadAxis, PadButton, TargetAddr};
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Fullscreen, Window, WindowId};
 
-use crate::hud::ButtonHud;
+use crate::debug::DebugOverlay;
 use crate::menu::{Menu, MenuAction, TRANSPORT_CHOICES};
 use crate::render::Renderer;
 use crate::worker::TransportWorker;
@@ -66,10 +71,11 @@ pub struct App {
 
     input: Option<InputManager>,
     menu: Menu,
-    hud: ButtonHud,
+    debug: DebugOverlay,
     nav_repeater: NavRepeater,
     pressed: HashSet<PadButton>,
     chord_active: bool,
+    debug_chord_active: bool,
     stick: (f32, f32),
 }
 
@@ -105,9 +111,9 @@ impl App {
                 None
             }
         };
-        let mut hud = ButtonHud::new();
+        let mut debug = DebugOverlay::new(std::env::var_os("COUCHCAST_DEBUG").is_some());
         if let Some(input) = &input {
-            hud.set_devices(&input.connected_names());
+            debug.set_devices(&input.connected_names());
         }
 
         Self {
@@ -122,10 +128,11 @@ impl App {
             logged_first_frame: false,
             input,
             menu,
-            hud,
+            debug,
             nav_repeater: NavRepeater::default(),
             pressed: HashSet::new(),
             chord_active: false,
+            debug_chord_active: false,
             stick: (0.0, 0.0),
         }
     }
@@ -151,16 +158,77 @@ impl App {
         }
     }
 
+    /// Switch capture to `node`: remember it, refresh the menu's capture-format
+    /// lists (which clamps carried-over prefs to what this device offers, so an
+    /// unsupported resolution/codec becomes Auto instead of failing the pipeline),
+    /// then build and persist.
     fn set_device(&mut self, node: String) {
-        let name = self
-            .devices
+        let name = self.device_name(&node);
+        self.config.last_device = Some(DeviceRef {
+            name: name.clone(),
+            node: node.clone(),
+        });
+        self.refresh_menu_formats();
+        self.build_and_store(node, name);
+        self.save_config();
+    }
+
+    /// Rebuild the pipeline for the current device using the current media prefs,
+    /// after a codec/resolution/framerate/audio change. Leaves the selected device
+    /// and menu format lists untouched.
+    fn rebuild_pipeline(&mut self) {
+        match self.config.last_device.as_ref().map(|d| d.node.clone()) {
+            Some(node) => {
+                let name = self.device_name(&node);
+                self.build_and_store(node, name);
+            }
+            None if std::env::var_os("COUCHCAST_TEST_SOURCE").is_some() => {
+                self.build_and_store("/dev/null".to_owned(), "test source".to_owned());
+            }
+            None => {}
+        }
+    }
+
+    /// The advertised name for `node`, falling back to the node path.
+    fn device_name(&self, node: &str) -> String {
+        self.devices
             .iter()
             .find(|d| d.node == node)
             .map(|d| d.name.clone())
-            .unwrap_or_else(|| node.clone());
+            .unwrap_or_else(|| node.to_owned())
+    }
 
+    /// Rebuild the menu's capture-format lists from the active device and adopt the
+    /// (possibly clamped) selection back into `config.media`, so the pipeline is
+    /// built with values the device actually supports.
+    fn refresh_menu_formats(&mut self) {
+        let formats = self
+            .config
+            .last_device
+            .as_ref()
+            .and_then(|d| self.devices.iter().find(|c| c.node == d.node))
+            .map(|d| d.formats.clone())
+            .unwrap_or_default();
+        self.menu.set_formats(
+            formats,
+            self.config.media.codec.map(to_media_codec),
+            self.config.media.width,
+            self.config.media.height,
+            self.config.media.framerate,
+        );
+        let (codec, width, height, framerate) = self.menu.capture_selection();
+        self.config.media.codec = codec.map(to_config_codec);
+        self.config.media.width = width;
+        self.config.media.height = height;
+        self.config.media.framerate = framerate;
+    }
+
+    /// Build + start the pipeline for `(node, name)` with the current media prefs
+    /// and store it, updating `status`.
+    fn build_and_store(&mut self, node: String, name: String) {
         let cfg = PipelineConfig {
             device_node: node.clone(),
+            codec: self.config.media.codec.map(to_media_codec),
             width: self.config.media.width,
             height: self.config.media.height,
             framerate: self.config.media.framerate,
@@ -172,8 +240,6 @@ impl App {
             Ok(pipeline) => {
                 self.status = format!("Playing {name}");
                 self.pipeline = Some(pipeline);
-                self.config.last_device = Some(DeviceRef { name, node });
-                self.save_config();
             }
             Err(e) => {
                 tracing::error!("failed to start pipeline for {node}: {e}");
@@ -248,6 +314,12 @@ impl App {
                 );
                 self.logged_first_frame = true;
             }
+            self.debug.on_capture_frame(
+                Instant::now(),
+                frame.width(),
+                frame.height(),
+                frame.format().label(),
+            );
             active.renderer.upload_video(&frame);
         }
     }
@@ -287,7 +359,7 @@ impl App {
                 } else {
                     self.pressed.remove(button);
                 }
-                self.hud.update(&self.pressed);
+                self.debug.update(&self.pressed);
             }
             PadEvent::Axis { axis, value } => match axis {
                 PadAxis::LeftStickX => self.stick.0 = *value,
@@ -296,10 +368,11 @@ impl App {
             },
             PadEvent::Connected { .. } | PadEvent::Disconnected { .. } => {
                 if let Some(input) = &self.input {
-                    self.hud.set_devices(&input.connected_names());
+                    self.debug.set_devices(&input.connected_names());
                 }
             }
         }
+        self.debug.set_stick(self.stick.0, self.stick.1);
 
         // Start + Select toggles the menu (edge-triggered).
         let chord =
@@ -311,6 +384,20 @@ impl App {
         }
         if !chord {
             self.chord_active = false;
+        }
+
+        // L3 + R3 (both stick clicks) toggles the debug overlay (edge-triggered).
+        // A controller-reachable gesture so the overlay works on a Steam Deck in
+        // Gaming Mode where there is no keyboard for F3.
+        let debug_chord = self.pressed.contains(&PadButton::LeftStick)
+            && self.pressed.contains(&PadButton::RightStick);
+        if debug_chord && !self.debug_chord_active {
+            self.debug_chord_active = true;
+            self.debug.toggle();
+            return;
+        }
+        if !debug_chord {
+            self.debug_chord_active = false;
         }
 
         // Edge-triggered actions on button press.
@@ -367,9 +454,23 @@ impl App {
                     self.set_device(node);
                 }
             }
+            MenuAction::SetCapture {
+                codec,
+                width,
+                height,
+                framerate,
+            } => {
+                self.config.media.codec = codec.map(to_config_codec);
+                self.config.media.width = width;
+                self.config.media.height = height;
+                self.config.media.framerate = framerate;
+                self.save_config();
+                self.rebuild_pipeline();
+            }
             MenuAction::SetAudio(on) => {
                 self.config.media.audio = on;
                 self.save_config();
+                self.rebuild_pipeline();
             }
             MenuAction::Connect => {
                 let kind = self.menu.selected_transport();
@@ -389,11 +490,23 @@ impl App {
 
     /// Run egui + present one frame.
     fn draw(&mut self) {
+        let now = Instant::now();
+        self.debug.tick_render(now);
+        // The debug overlay's context lines are cheap to recompute but pointless
+        // when it is hidden, so only refresh them while it is visible.
+        if self.debug.is_enabled() {
+            let (device_line, mode_line) = self.debug_capture_context();
+            let transport_line = self.debug_transport_line();
+            let audio = self.config.media.audio;
+            self.debug
+                .set_capture_context(device_line, mode_line, audio);
+            self.debug.set_transport(transport_line);
+        }
         let Self {
             active,
             menu,
             devices,
-            hud,
+            debug,
             status,
             ..
         } = self;
@@ -410,7 +523,7 @@ impl App {
             } else {
                 status_overlay(ui, status);
             }
-            hud.draw(ui.ctx());
+            debug.draw(ui.ctx(), now, status);
         });
         active
             .egui_state
@@ -418,6 +531,45 @@ impl App {
         let ppp = active.egui_ctx.pixels_per_point();
         let jobs = active.egui_ctx.tessellate(output.shapes, ppp);
         active.renderer.render(ppp, &jobs, &output.textures_delta);
+    }
+
+    /// Build the debug overlay's "Device" and "Mode" lines from the current
+    /// selection and media prefs.
+    fn debug_capture_context(&self) -> (String, String) {
+        let device_line = match &self.config.last_device {
+            Some(d) => format!("{} ({})", d.name, d.node),
+            None => "(none)".to_owned(),
+        };
+        let m = &self.config.media;
+        let codec = m.codec.map(debug_codec_label).unwrap_or("auto");
+        let dim = |v: Option<u32>| v.map(|n| n.to_string()).unwrap_or_else(|| "auto".to_owned());
+        let fps = m.framerate.map(|f| format!("@{f}")).unwrap_or_default();
+        let mode_line = format!("{codec} {}×{}{fps}", dim(m.width), dim(m.height));
+        (device_line, mode_line)
+    }
+
+    /// Build the debug overlay's "Transport" line, mirroring what
+    /// [`auto_connect_transport`](Self::auto_connect_transport) connects to.
+    fn debug_transport_line(&self) -> String {
+        match &self.config.target {
+            Some(t) => format!("{:?} → {}", t.transport, t.address),
+            None => "Log → (unset)".to_owned(),
+        }
+    }
+}
+
+/// A short label for the config-side capture codec, used by the debug overlay
+/// (the media crate has its own `CaptureCodec::label`, but config stays free of
+/// that dependency).
+fn debug_codec_label(codec: ConfigCodec) -> &'static str {
+    match codec {
+        ConfigCodec::Mjpeg => "MJPEG",
+        ConfigCodec::H264 => "H.264",
+        ConfigCodec::Yuyv => "YUYV",
+        ConfigCodec::Nv12 => "NV12",
+        ConfigCodec::I420 => "I420",
+        ConfigCodec::P010 => "P010",
+        ConfigCodec::Bgr => "BGR",
     }
 }
 
@@ -451,6 +603,7 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         };
+        self.debug.set_gpu(renderer.adapter_info().to_owned());
 
         let egui_ctx = egui::Context::default();
         let egui_state = egui_winit::State::new(
@@ -509,6 +662,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 match event.logical_key {
                     Key::Named(NamedKey::F1) => self.menu.toggle_open(),
+                    Key::Named(NamedKey::F3) => self.debug.toggle(),
                     Key::Named(NamedKey::Escape) => {
                         self.worker.disconnect();
                         event_loop.exit();
@@ -544,6 +698,33 @@ fn status_overlay(ui: &mut egui::Ui, status: &str) {
                     ui.colored_label(egui::Color32::WHITE, status);
                 });
         });
+}
+
+/// Map the persisted codec preference to the media crate's codec. The two enums
+/// are kept separate so `couchcast-config` stays free of the `gstreamer` dependency.
+fn to_media_codec(codec: ConfigCodec) -> MediaCodec {
+    match codec {
+        ConfigCodec::Mjpeg => MediaCodec::Mjpeg,
+        ConfigCodec::H264 => MediaCodec::H264,
+        ConfigCodec::Yuyv => MediaCodec::Yuyv,
+        ConfigCodec::Nv12 => MediaCodec::Nv12,
+        ConfigCodec::I420 => MediaCodec::I420,
+        ConfigCodec::P010 => MediaCodec::P010,
+        ConfigCodec::Bgr => MediaCodec::Bgr,
+    }
+}
+
+/// Map the media crate's codec back to the persisted representation.
+fn to_config_codec(codec: MediaCodec) -> ConfigCodec {
+    match codec {
+        MediaCodec::Mjpeg => ConfigCodec::Mjpeg,
+        MediaCodec::H264 => ConfigCodec::H264,
+        MediaCodec::Yuyv => ConfigCodec::Yuyv,
+        MediaCodec::Nv12 => ConfigCodec::Nv12,
+        MediaCodec::I420 => ConfigCodec::I420,
+        MediaCodec::P010 => ConfigCodec::P010,
+        MediaCodec::Bgr => ConfigCodec::Bgr,
+    }
 }
 
 /// Best-effort request to show Steam's on-screen keyboard. This is unreliable

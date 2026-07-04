@@ -4,6 +4,7 @@ use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
 
+use crate::device::CaptureCodec;
 use crate::error::MediaError;
 use crate::frame::VideoFrame;
 use crate::init_gstreamer;
@@ -13,9 +14,13 @@ use crate::init_gstreamer;
 pub struct PipelineConfig {
     /// The V4L2 device node to capture from, e.g. `/dev/video0`.
     pub device_node: String,
-    /// Preferred output width (post-decode scaling); `None` = device default.
+    /// Capture input format to request from the device; `None` = let `decodebin`
+    /// auto-negotiate. When set, width/height/framerate are negotiated at the
+    /// source (before decode) rather than scaled afterwards.
+    pub codec: Option<CaptureCodec>,
+    /// Preferred capture width; `None` = device default.
     pub width: Option<u32>,
-    /// Preferred output height.
+    /// Preferred capture height.
     pub height: Option<u32>,
     /// Preferred framerate in fps.
     pub framerate: Option<u32>,
@@ -28,6 +33,7 @@ impl PipelineConfig {
     pub fn new(device_node: impl Into<String>) -> Self {
         Self {
             device_node: device_node.into(),
+            codec: None,
             width: None,
             height: None,
             framerate: None,
@@ -220,30 +226,8 @@ impl Drop for CapturePipeline {
 /// The video branch converts to NV12 in system memory for the sysmem upload
 /// path. `TODO`: a DMABUF branch (no `videoconvert`, VA decoder) for zero-copy;
 /// select the audio source node explicitly instead of `pipewiresrc`'s default.
-fn build_description(config: &PipelineConfig, with_audio: bool) -> String {
-    let mut desc = String::new();
-
-    // --- Video branch ---
-    // Dev hook: COUCHCAST_TEST_SOURCE swaps the capture device for a synthetic
-    // test pattern, so the appsink → upload → render path can be exercised on a
-    // machine with no capture hardware.
-    if std::env::var_os("COUCHCAST_TEST_SOURCE").is_some() {
-        desc.push_str("videotestsrc is-live=true ! videoconvert ! ");
-    } else {
-        desc.push_str(&format!(
-            "v4l2src device={} do-timestamp=true ! decodebin ! videoconvert ! ",
-            config.device_node
-        ));
-    }
-
-    if config.width.is_some() || config.height.is_some() || config.framerate.is_some() {
-        desc.push_str("videoscale ! videorate ! ");
-    }
-
-    desc.push_str(&format!(
-        "video/x-raw,format={}",
-        crate::frame::NEGOTIATED_FORMAT
-    ));
+/// Append the `,width=…,height=…,framerate=…/1` caps fragments present in `config`.
+fn append_dims(desc: &mut String, config: &PipelineConfig) {
     if let Some(w) = config.width {
         desc.push_str(&format!(",width={w}"));
     }
@@ -252,6 +236,52 @@ fn build_description(config: &PipelineConfig, with_audio: bool) -> String {
     }
     if let Some(fps) = config.framerate {
         desc.push_str(&format!(",framerate={fps}/1"));
+    }
+}
+
+fn build_description(config: &PipelineConfig, with_audio: bool) -> String {
+    let mut desc = String::new();
+
+    // --- Video branch ---
+    // Dev hook: COUCHCAST_TEST_SOURCE swaps the capture device for a synthetic
+    // test pattern, so the appsink → upload → render path can be exercised on a
+    // machine with no capture hardware. The synthetic source has no real device
+    // caps, so codec selection does not apply to it.
+    let is_test_source = std::env::var_os("COUCHCAST_TEST_SOURCE").is_some();
+    let codec = if is_test_source { None } else { config.codec };
+
+    if is_test_source {
+        desc.push_str("videotestsrc is-live=true ! videoconvert ! ");
+    } else {
+        desc.push_str(&format!(
+            "v4l2src device={} do-timestamp=true ! ",
+            config.device_node
+        ));
+        // With a codec chosen, pin the capture mode (codec + resolution +
+        // framerate) directly on the device caps so v4l2src negotiates it at the
+        // source; decodebin then decodes that exact stream.
+        if let Some(codec) = codec {
+            desc.push_str(codec.source_caps());
+            append_dims(&mut desc, config);
+            desc.push_str(" ! ");
+        }
+        desc.push_str("decodebin ! videoconvert ! ");
+    }
+
+    // Without a source-pinned codec, apply any resolution/framerate override by
+    // scaling after decode (the historical path, also used by the test source).
+    if codec.is_none()
+        && (config.width.is_some() || config.height.is_some() || config.framerate.is_some())
+    {
+        desc.push_str("videoscale ! videorate ! ");
+    }
+
+    desc.push_str(&format!(
+        "video/x-raw,format={}",
+        crate::frame::NEGOTIATED_FORMAT
+    ));
+    if codec.is_none() {
+        append_dims(&mut desc, config);
     }
 
     desc.push_str(
@@ -298,6 +328,7 @@ mod tests {
     fn format_overrides_add_caps_filter() {
         let cfg = PipelineConfig {
             device_node: "/dev/video2".into(),
+            codec: None,
             width: Some(1920),
             height: Some(1080),
             framerate: Some(60),
@@ -308,5 +339,42 @@ mod tests {
         assert!(desc.contains("height=1080"));
         assert!(desc.contains("framerate=60/1"));
         assert!(desc.contains("videoscale"));
+    }
+
+    #[test]
+    fn codec_pins_source_caps_and_skips_scaling() {
+        let cfg = PipelineConfig {
+            device_node: "/dev/video0".into(),
+            codec: Some(CaptureCodec::Mjpeg),
+            width: Some(1920),
+            height: Some(1080),
+            framerate: Some(60),
+            audio: false,
+        };
+        let desc = build_description(&cfg, false);
+        // Source-side caps filter in front of decodebin carries the mode.
+        assert!(desc.contains("image/jpeg,width=1920,height=1080,framerate=60/1 ! decodebin"));
+        // No post-decode rescale when the source is pinned.
+        assert!(!desc.contains("videoscale"));
+        // Output still negotiates NV12 (without dimensions).
+        assert!(desc.contains("video/x-raw,format=NV12 !"));
+    }
+
+    #[test]
+    fn raw_codec_pins_pixel_format_at_source() {
+        // 10-bit P010 pinned at the source, converted down to NV12 for the renderer.
+        let cfg = PipelineConfig {
+            device_node: "/dev/video0".into(),
+            codec: Some(CaptureCodec::P010),
+            width: Some(1920),
+            height: Some(1080),
+            framerate: Some(60),
+            audio: false,
+        };
+        let desc = build_description(&cfg, false);
+        assert!(desc.contains(
+            "video/x-raw,format=P010_10LE,width=1920,height=1080,framerate=60/1 ! decodebin"
+        ));
+        assert!(desc.contains("videoconvert ! video/x-raw,format=NV12 !"));
     }
 }

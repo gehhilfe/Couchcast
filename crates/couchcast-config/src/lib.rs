@@ -83,9 +83,28 @@ impl TargetConfig {
     }
 }
 
+/// The capture input format to request from the device (a V4L2 pixel format or
+/// compressed codec). Mirrors `couchcast_media::CaptureCodec`; kept here (rather
+/// than depending on the media crate) so config stays free of the heavy
+/// `gstreamer`/`v4l` dependencies. The app maps between the two, as it already
+/// does for the other media prefs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CaptureCodec {
+    Mjpeg,
+    H264,
+    Yuyv,
+    Nv12,
+    I420,
+    P010,
+    Bgr,
+}
+
 /// Video/audio preferences for the capture pipeline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MediaPrefs {
+    /// Preferred capture input format; `None` = let the pipeline auto-negotiate.
+    pub codec: Option<CaptureCodec>,
     /// Preferred capture width in pixels; `None` = negotiate the device default.
     pub width: Option<u32>,
     /// Preferred capture height in pixels.
@@ -99,6 +118,7 @@ pub struct MediaPrefs {
 impl Default for MediaPrefs {
     fn default() -> Self {
         Self {
+            codec: None,
             width: None,
             height: None,
             framerate: None,
@@ -210,6 +230,7 @@ mod tests {
                 node: "/dev/video0".into(),
             }),
             media: MediaPrefs {
+                codec: Some(CaptureCodec::Mjpeg),
                 width: Some(1920),
                 height: Some(1080),
                 framerate: Some(60),
